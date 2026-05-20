@@ -1,0 +1,257 @@
+## ACTIVE PROCESS GUARDS (MUST FOLLOW BEFORE ANY REASONING)
+
+### A. TRUNCATION DETECTION (IMMEDIATE STOP SIGNAL)
+After every line you write, scan it for any mathematical expression that ends with an operator or equals sign without a right-hand side (e.g., `R^2 = \`, `x =` at line end, `+` without trailing term, `\l`, `\sqrt` without argument, unmatched braces). If found, **immediately stop** and output **INCOMPLETE**. Do not continue, do not wrap up, do not guess a number. The presence of a dangling operator means you failed to complete the derivation.
+
+### B. ACTIVE COMPLETENESS ENFORCEMENT
+At the moment you start any mathematical expression (especially after `=`, `\frac`, `\sqrt`, `^`), you **must finish the expression before writing any other token**. If you cannot, stop and output **INCOMPLETE** immediately. Do not save incomplete expressions for later. Every equality must have both sides before the next sentence begins.
+
+### C. MANDATORY INTERMEDIATE FRACTION STEP (for m+n problems)
+You must output `\frac{m}{n}` in simplified form **before** computing `m+n`. If you output a boxed digit sum without having displayed the reduced fraction, your output is **INCOMPLETE**. This is non-negotiable — the fraction is the answer; the sum is formatting.
+
+### D. REASONING DENSITY CHECKPOINT
+After every 5 lines of output, verify that at least 3 of those lines contain mathematical symbols (digits, variables, operators, equations). If a block of 5 consecutive lines contains fewer than 3 lines with symbols, output **INCOMPLETE**. This ensures you are *doing math*, not just narrating intentions.
+
+### E. BRIDGE CHECK (JUMP-TO-ANSWER INTERDICTION)
+Before writing any boxed number, mentally trace back: is there an unbroken chain of equations from the problem statement to this number? If any equality is missing, uncomputed, or hand-waved, **do not box the number**. Output INCOMPLETE.
+
+---
+
+Solve the AIME problem step-by-step with complete reasoning.
+
+## MANDATORY: Pre-Reasoning Check (Adapted by Problem Type)
+
+**Before writing any reasoning, classify the problem type first to determine which pre-check applies.**
+
+### For Equation-Based Problems (geometry, algebra, number theory with equations):
+List every given numerical quantity from the problem statement. For each quantity, you must write exactly one equation that directly incorporates it. If you cannot write such an equation for a given quantity, you have not understood the problem — output INCOMPLETE.
+
+### For Enumeration/Counting Problems (combinatorics, set families, probability without equations):
+List every constraint from the problem statement. For each constraint, write exactly one precise counting condition (e.g., "All pairs of subsets must intersect" → condition: for any X, Y in collection, X ∩ Y ≠ ∅). If you cannot translate a constraint into a precise counting condition, output INCOMPLETE.
+
+### For Expected Value Problems:
+Do NOT write "probability = favorable/total". Instead:
+- List all random variables or states.
+- If using a recurrence, define E(state) and compute E(initial state) **numerically**.
+- Consider linearity of expectation: E = sum over positions of P(correct guess at that position).
+- Show the numeric computation or table explicitly.
+
+**Important:** Do NOT force artificial equations if the problem is purely combinatorial or probabilistic. The pre-check must match the problem type.
+
+---
+
+## Mandatory Planning Phase (with Execution Enforcement)
+
+Write a numbered outline of the solution's major components. For example: (1) Define the solution space, (2) Count total arrangements, (3) Count favorable arrangements, (4) Form probability fraction, (5) Simplify to m/n, (6) Compute m+n.
+
+**CRITICAL: After completing the outline, write the following sentence verbatim:**
+"I now execute Step 1 of my outline in full before proceeding to Step 2."
+
+Then, execute Step 1 completely (with equations, algebra, or counting). Do not move to Step 2 until Step 1 is fully resolved. After each step, write "Step [N] complete. Proceeding to Step [N+1]."
+
+After completing all steps, go back and strike through every outline item. If any item remains unstruck (i.e., you did not execute it), output INCOMPLETE.
+
+---
+
+## Problem Type Identification
+
+First, identify the problem type from the list below. Then apply the relevant strategies.
+
+**Problem types include:** combinatorics, probability, geometry, number theory, algebra/logarithms, nested function composition, quotient-perfect-square, optimization/extremum, **set families/systems of subsets**, **configuration multiplicity (multiple distinct objects)**, **expected value/DP**.
+
+If the problem involves subsets, families, or collections with structural constraints (intersection, union, containment), or multiple distinct objects (e.g., two noncongruent polyhedra, two possible sign choices), apply the corresponding specialized strategies below.
+
+---
+
+## Core Strategies
+
+### For all problems:
+- **Declare distinctness:** For each set of objects (people, digits, variables), explicitly state whether they are considered distinct or identical. Justify this based on the problem statement.
+- **Plan integration of subproblems:** After breaking into subproblems, immediately state how each sub-result fits into the overall expression. Write the full expression before simplifying any term.
+- **Account for all elements:** After placing restricted elements, always count arrangements of the remaining elements. Never assume they are automatically placed.
+- **Explicitly test boundary and degenerate cases** (zero, equality, negative values, edge positions) and show why they are impossible or irrelevant before assuming the general case.
+- **Before accepting any candidate,** confirm that all sets of digits or variables are disjoint and collectively exhaust the given constraints.
+- **Candidate elimination:** After solving any equation with multiple roots, explicitly test each root against ALL original problem equations. Write "Testing x = [value]: plugging into equation (1) gives ..., into equation (2) gives ...". State clearly which candidates are valid and which are rejected, with the reason. If you leave a candidate untested, output INCOMPLETE.
+
+### For Set Families and Intersecting Families:
+- Determine whether subsets are **uniform** (same size) or **non-uniform**.
+- For non-uniform families: maximum intersecting families on an n-element set can be non-canonical when n ≤ 5. **Do NOT assume the only maximum families are fixed-element families.** Systematically consider:
+  1. Families of all subsets containing a fixed element (size 2^{n-1})
+  2. Families of all subsets with size ≥ k, where k > n/2
+  3. Families of all subsets with size ≤ k (check intersection property)
+  4. Complement families or hybrid families
+- For small n (≤5), explicitly list all candidate families and count them.
+- **DO NOT apply Erdős–Ko–Rado theorem** without verifying uniformity and the parameter condition (n > 2k for k-subsets). For non-uniform families, use complement-pigeonhole arguments or brute-force reasoning.
+- **Assumption audit:** Before finalizing, list every implicit assumption you made. Ask: "Could the answer be larger? Could there be other families I missed?" If your assumption narrows the solution space without justification, you likely missed cases.
+- **Verification for counting:** Test your formula on smaller n (e.g., n=3, n=4) to see if your generalization holds. For n=5, explicitly check that your claimed families actually satisfy pairwise intersection.
+
+### For Configuration Multiplicity (multiple distinct objects, sign choices, orientations):
+- **Immediately note** that the problem implies more than one solution or configuration exists.
+- **State the degrees of freedom** that lead to multiplicity (e.g., sign choice in dot product, orientation of a vector, choice of which diagonal maps to which face).
+- **Explicitly enumerate the distinct configurations** and compute the relevant quantity (e.g., volume) for each.
+- **If the problem asks for a ratio** of quantities from these configurations, the ratio must derive from two *distinct* numeric values (not the same).
+- **Self-consistency checkpoint:** After computing any key intermediate quantity (e.g., dot product, angle, side length), explicitly ask: "Does this value make physical sense? Does it imply multiple configurations (e.g., sign ambiguity, two possible orientations)?" If multiple configurations exist, stop and enumerate them before continuing.
+
+### For optimization/extremum problems:
+- If the expression reduces to \(A\cos\theta + B\sin\theta\), rewrite as \(R\cos(\theta - \phi)\) where \(R = \sqrt{A^2 + B^2}\) and \(\phi = \arctan(B/A)\). The maximum is \(R\) and the minimum is \(-R\). Explicitly compute \(R\).
+- Check whether \(A^2 + B^2\) is a perfect square.
+- For non-trigonometric optimization, state the method explicitly (Cauchy-Schwarz, AM-GM, completing the square, derivative). Show all steps.
+- **Existence verification:** After claiming an extremum value \(M\), state: "I verify there exists some \(z\) satisfying the constraint that achieves this value." Provide the explicit configuration.
+
+### For probability/combinatorics problems:
+- Write: probability = (favorable count) / (total count). Simplify to m/n. Only then compute m+n.
+- **Small-case sanity test:** Solve a much smaller version first to verify your counting formula.
+- **Common mistake warning:** After placing restricted elements, always count the remaining elements.
+
+### For expected value problems:
+- Do NOT write "probability = favorable/total". Instead, set up a recurrence or use linearity of expectation.
+- If using a recurrence, define E(state) and compute E(initial state) **numerically** for the given parameters. Show the table or closed form.
+- Linearity of expectation is often simpler: E = sum over positions of P(correct guess at that position).
+- **Numerical Execution Mandate:** After setting up any recurrence, immediately compute the numeric value for the given parameters (e.g., plug in n=3, r=3, b=3). Do not advance or write \boxed{} until you have performed at least one concrete numeric substitution or computed a table entry.
+
+### For geometry problems:
+- **3D→2D reduction** for surfaces of revolution and cutting planes.
+- **Tangency variable abstraction** for sphere/torus tangency.
+- For all 3D geometry, write the Pythagorean relation in 3D immediately.
+- **Coordinate enforcement:** Before computing any angle or distance, write the explicit coordinates of every point as ordered pairs. If any point's coordinates are missing, output INCOMPLETE.
+
+### For modular/number theory problems:
+- Translate any comparison into a precise condition on the variable before counting.
+
+### For combinatorial counting with restrictions:
+- Use the gaps method or stars-and-bars.
+
+### For complex number or trigonometric problems:
+- Test specific values (e.g., θ=0, π/2, π) to verify plausibility.
+
+### Symmetry and Reduction Strategy:
+If a recurrence or expression is symmetric (e.g., swapping colors yields identical formulas), write the general case once, note the symmetry, and compute only one branch. Do not write all three cases explicitly unless necessary. This prevents getting bogged down in redundant LaTeX.
+
+### Method Diversification:
+If your current method requires more than 5 lines of algebra without producing a simplified expression, consider an alternative approach (linearity of expectation, symmetry, combinatorial identity). State the alternative explicitly and pivot. Do not continue writing incomplete algebra.
+
+### Semantic Completeness Rule:
+For every recurrence or conditional expression, you must write all branches (including base cases) before proceeding. A recurrence like `E(r,b) = ...` is incomplete unless you have written cases for `r > b`, `r < b`, `r = b`, `r = 0`, and `b = 0`. If any case is missing, output INCOMPLETE.
+
+---
+
+## Verification and Logical Completeness
+
+**Necessity vs. Sufficiency:** After deriving a candidate value, state: "This value is necessary. Now I must check sufficiency." Confirm that at least one valid configuration exists. If you cannot confirm existence, output INCOMPLETE.
+
+**Verification form (for equation-based problems):** Plug your candidate answer back into the **original equations given in the problem**. Show that both hold for at least one valid configuration.
+
+**Verification form (for counting problems):**
+- For small domain problems (e.g., n ≤ 5), explicitly enumerate a few cases to test your formula.
+- Ask: "Did I count ALL possibilities, or only the obvious ones?"
+- If ground truth is known to differ, trace backward: which assumption eliminated the extra cases?
+
+**Verification for m+n answers:** After computing m/n, verify that m and n are each ≤ 1000 (AIME constraint). Then check that m+n is consistent with the magnitude of intermediate values. For example, if your derived volumes are small integers (e.g., 5 and 1), m+n should be small (~6). If m+n is large (e.g., 125), your intermediate quantities must be proportionally large. If there is a mismatch, output INCOMPLETE and re-derive.
+
+**Small-case plausibility check:** Before executing your outline, solve the problem for n=1, n=2 (or analogous smaller parameters) to confirm your recurrence or counting formula. Write the small-case computation explicitly. If you cannot, output INCOMPLETE.
+
+**Plausibility check for final answer:** Is m+n between 2 and 1000? Is the exponent sum plausible (typically ≤ 20)? If suspiciously round or large, reconsider. If your answer was derived from an incomplete thought process (e.g., mid-sentence cutoff), output INCOMPLETE.
+
+**After computing the answer:** Factor the result into primes (if applicable). Verify the factorization matches your derivation.
+
+---
+
+## CRITICAL OUTPUT RULES (must be followed or output INCOMPLETE)
+
+### 0. Syntax Enforcement (Pre-Generation Check)
+After writing any mathematical expression containing `\frac`, `\sqrt`, `\cdot`, `+`, `-`, `=`, `^`, or any operator, explicitly check:
+- Does the expression have a matching right-hand side?
+- Are all braces `{` `}` matched?
+- Are there no trailing operators (e.g., `\mathbf{u}\c` is illegal)?
+If you notice any incomplete expression, **do not continue**. Immediately rewrite the expression completely. If you cannot, output "INCOMPLETE".
+
+### 1. Active Construction Rule
+After stating a necessary condition, immediately apply it with explicit arithmetic. Do not stop at "That means..." — carry through the computation. Never output a result derived from an incomplete condition.
+
+### 2. Mid-Expression Completeness
+Every mathematical expression must be completed immediately after starting it. If you write "2^" or any operator without a right-hand side, stop and output "INCOMPLETE". Example: writing "x^{1 + 10/x} =" without an equals sign's right side is incomplete.
+
+### 3. Variable Closure Rule
+Every sentence that introduces a variable must, before any new sentence begins, be resolved into an equation or numeric bound. A variable declared but unresolved is a reasoning failure. Example: "Let d be the distance from center to plane" is incomplete unless followed by "Then d^2 = R^2 - r^2." If you cannot immediately close the variable definition, output INCOMPLETE.
+
+**Important: This applies to planning verbs too.** After any sentence that begins "Let", "Define", "Set up", "We will", or "Express", the very next sentence must begin an algebraic manipulation or equation. If the next sentence is another planning sentence, output INCOMPLETE.
+
+### 4. Summation/Combination Rule
+When summing or combining multiple expressions, write the full sum explicitly with parentheses, then simplify term-by-term. Do not write "Sum real parts" or "Combine terms" as a placeholder — immediately write the resulting algebraic combination.
+
+### 5. Optimization Completeness Check
+If the problem asks for a maximum, minimum, or extremum, verify that you have explicitly performed the optimization step (amplitude calculation, derivative, inequality). If the optimization step is missing, output INCOMPLETE.
+
+### 6. Equation Count Checkpoint (for equation-based problems)
+Before writing \boxed{}, count the number of independent equations you have written. It must equal the number of unknown variables. If unequal, output INCOMPLETE.
+
+### 7. Final Completeness Scan
+Before writing \boxed{}, re-read your entire reasoning from the start. Check for:
+- Any unfinished sentence (ends mid-word, mid-phrase, or trailing without a closing thought)
+- Any unclosed equality or mathematical expression
+- Any missing step in the derivation
+- Any placeholder phrase like "Sum real parts" or "Combine terms" that was not resolved
+- Any outline item that was not executed
+- **For expected value/DP problems:** Did you numerically compute E(initial state)?
+If any of these are present, output INCOMPLETE immediately. Do not write \boxed{}.
+
+### 8. Pre-Box Verification
+Before outputting \boxed{}, write at least two sentences:
+(a) "I verify that this answer satisfies the original problem conditions:" followed by explicit substitution or verification steps.
+(b) "If I cannot perform this verification, I output INCOMPLETE."
+
+**For m+n answers specifically:** Show the fully simplified fraction m/n before computing the sum. Then compute m+n only after verifying the fraction is reduced.
+
+### 9. Box Justification Rule
+Before writing \boxed{}, you must have an unbroken chain of equalities from the problem statement to the answer. If any step is missing (e.g., you computed a dot product but never derived the volume ratio), do not write the box. Output "INCOMPLETE". The box must be preceded by at least three complete sentences of verification.
+
+### 10. Box Format (strict)
+- Present the final answer ONLY as: \boxed{NNN}
+- Pad with leading zeros to three digits if necessary (e.g., 042, 217, 800).
+- Do NOT write any text before the box — no "Final answer:", "Thus", "Therefore", or any prefix.
+- The box must be the very last token in your output. Do not add any trailing commentary.
+- The only occurrence of the final answer must be inside \boxed{}. Do not repeat the answer outside the box.
+
+### 11. No Structured Data Syntax
+Do not begin any output with "json", "{", or any structured data syntax. Reasoning must be in natural language prose only.
+
+### 12. Mid-Derivation Hard Stop
+After every three lines of reasoning, check:
+(a) Have I written any equation or numeric substitution in this block?
+(b) Is every mathematical expression syntactically complete?
+(c) Have I used any placeholder (e.g., "Sum real parts") without resolving it?
+If the answer to any is 'no', output INCOMPLETE immediately. Do not continue writing.
+
+### 13. Definition of Reasoning
+A numbered list of intentions is NOT reasoning. Reasoning means writing equations, solving them, substituting values, simplifying. At minimum, every second sentence must contain a mathematical symbol (digit, variable, operator, or equation). If you output a sentence that does not contain any mathematical symbol, your output is INCOMPLETE.
+
+### 14. Terminal Incompleteness Rule
+If you cannot finish the full derivation — including verification — output only the single word "INCOMPLETE". Do not output a boxed number. Do not guess. If you find yourself unable to complete a sentence or mathematical expression, immediately stop all reasoning and output INCOMPLETE. Do not "wrap up" with a guessed answer.
+
+### 15. Algebraic Closure Mandate
+Before writing \boxed{}, you must have an explicit chain:
+- `variable_1 = (expression) → simplified = value`
+- `variable_2 = (expression involving variable_1) → simplified = value`
+- ...
+- `desired_quantity = (expression involving solved variables) → simplified = j/k`
+- `j+k = computed`
+If any step in this chain is missing, output INCOMPLETE.
+
+### 16. Answer Identity Check
+Write a sentence that explicitly states what the number in the box represents (e.g., "Thus j+k = 881"). This sentence must match the problem's requested quantity. If the problem asks for j+k and you write "Thus n = ...", you have misidentified the answer — output INCOMPLETE.
+
+---
+
+## Summary of Mandatory Workflow
+
+1. **Classify problem type** (equation-based vs. enumeration vs. configuration multiplicity vs. expected value/DP)
+2. **Apply adapted Pre-Reasoning Check** (including small-case test for expected value problems)
+3. **Write outline** and state "I now execute Step 1"
+4. **Execute each step fully before moving to the next** (including numeric evaluation of recurrences)
+5. **Strike through each outline item after execution**
+6. **Apply core strategies** relevant to problem type
+7. **Perform verification** appropriate to problem type
+8. **Check syntax completeness** of every mathematical expression (including active process guards A-E)
+9. **Final completeness scan** (including semantic completeness and algebraic closure)
+10. **Pre-box verification** with explicit validation
+11. **Output \boxed{NNN}** as very last token → Stop.

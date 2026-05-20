@@ -1,0 +1,25 @@
+Solve the AIME problem step-by-step with complete reasoning.
+
+## Universal Process
+1. **Decompose the problem**: Identify the mathematical structure (piecewise composition, combinatorial counting, geometry, number theory, etc.). For nested or piecewise functions, resolve from innermost outward, creating a piecewise tree. Explicitly compute domains and ranges over one fundamental period.
+
+2. **Handle boundaries first**: For any problem involving placements, intervals, or sequences, explicitly identify and handle boundary/edge cases separately before generalizing interior cases.
+
+3. **Use appropriate combinatorial methods**: For counting problems with restrictions (e.g., no consecutive integers), use gaps method, stars-and-bars, or blocking. Compute each subcase independently and output intermediate counts.
+
+4. **Check for symmetry**: For systems of equations, especially periodic ones, analyze symmetry between variables. Compute fundamental periods, take LCM, and count intersections over the resulting rectangle.
+
+## Completeness Guards
+- Every equation must be completed—never leave an equal sign, modulus operator, algebraic expression, or parenthesis without a matching right-hand side or closing bracket.
+- After writing the derivation, read it back. If any step contains an ellipsis (...), trailing arithmetic operator (+-*/), unclosed parenthesis, or undefined variable, output "INCOMPLETE" immediately.
+- **Before outputting the final answer**, write "VERIFYING:" followed by a summary of the verification check. Then write "ANSWER: [three-digit integer]". If you cannot complete both steps, output only "INCOMPLETE".
+
+## Verification and Validation
+- After every major sub-calculation, perform a sanity check: does this make sense for a simplified or smaller version of the problem? Re-derive if suspicious.
+- Before finalizing, substitute your candidate answer back into the original constraints. Confirm all sets/conditions are disjoint and collectively exhaustive.
+- **Magnitude plausibility check**: For periodic or multi-region problems, expect a number of regions/counts proportional to the problem size. If your answer is unusually small (e.g., <20 for a problem with multiple periods or 10 elements), reconsider.
+
+## Output Format
+- The only occurrence of the final answer must be inside \boxed{NNN}. Do not repeat the answer outside the box, in plain text, or in any other format (no JSON, no "Final answer:" paragraph, no structured data syntax).
+- Present the final answer as a three-digit integer (e.g., 042, 217, 800), padding with leading zeros if necessary.
+- Do not output anything until your derivation is complete, verified, and only the boxed answer remains after reasoning.

@@ -1,0 +1,80 @@
+[
+  {
+    "dataset": "mbpp",
+    "backend": "gepa",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/mbpp/gepa/runs/20260518_155657_424602",
+    "checks": {
+      "found_stub_prompt": true,
+      "found_improvement": true,
+      "has_error_feedback": true
+    }
+  },
+  {
+    "dataset": "mbpp",
+    "backend": "textgrad_original",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/mbpp/textgrad_original/runs/20260518_153446_134345",
+    "checks": {
+      "final_prompt_stubbed": true,
+      "final_val_score": 1.0,
+      "initial_val_score": 0.0
+    }
+  },
+  {
+    "dataset": "mbpp",
+    "backend": "parent_reflection_gepa",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/mbpp/parent_reflection_gepa/runs/20260518_153640_644161",
+    "checks": {
+      "best_prompt_stubbed": true,
+      "best_val_score": 1.0
+    }
+  },
+  {
+    "dataset": "mbpp",
+    "backend": "trace2skill_baseline",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/mbpp/trace2skill_baseline/runs/20260518_153955_927444",
+    "checks": {
+      "optimized_prompt_stubbed": true,
+      "final_val_score": 1.0,
+      "has_error_feedback": true
+    }
+  },
+  {
+    "dataset": "aime",
+    "backend": "gepa",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/aime/gepa/runs/20260518_154216_645405",
+    "checks": {
+      "found_stub_prompt": true,
+      "found_improvement": true,
+      "has_error_feedback": true
+    }
+  },
+  {
+    "dataset": "aime",
+    "backend": "textgrad_original",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/aime/textgrad_original/runs/20260518_154328_565199",
+    "checks": {
+      "final_prompt_stubbed": true,
+      "final_val_score": 1.0,
+      "initial_val_score": 0.0
+    }
+  },
+  {
+    "dataset": "aime",
+    "backend": "parent_reflection_gepa",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/aime/parent_reflection_gepa/runs/20260518_154216_661988",
+    "checks": {
+      "best_prompt_stubbed": true,
+      "best_val_score": 1.0
+    }
+  },
+  {
+    "dataset": "aime",
+    "backend": "trace2skill_baseline",
+    "run_dir": "/home/jlzeng/code/gepa/outputs/aime_math/aime/trace2skill_baseline/runs/20260518_154328_593804",
+    "checks": {
+      "optimized_prompt_stubbed": true,
+      "final_val_score": 1.0,
+      "has_error_feedback": true
+    }
+  }
+]

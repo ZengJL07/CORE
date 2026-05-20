@@ -124,30 +124,19 @@ Provide the new instructions within ``` blocks."""
     @classmethod
     def output_extractor(cls, lm_out: str) -> dict[str, str]:
         def extract_instruction_text() -> str:
-            # Find the first and last backtick positions (if any)
-            start = lm_out.find("```") + 3
-            end = lm_out.rfind("```")
+            fenced_blocks = re.findall(r"```(?:[^\n`]*)\n?(.*?)```", lm_out, flags=re.DOTALL)
+            if fenced_blocks:
+                return fenced_blocks[-1].strip()
 
-            # Handle if the first and last backticks are the same or overlap
-            if start >= end:
-                # Handle incomplete blocks
-                stripped = lm_out.strip()
-                if stripped.startswith("```"):
-                    # Remove opening ``` and optional language specifier
-                    match = re.match(r"^```\S*\n?", lm_out)
-                    if match:
-                        return lm_out[match.end() :].strip()
-                elif stripped.endswith("```"):
-                    # Remove closing ```
-                    return stripped[:-3].strip()
-                return stripped
-
-            # Skip optional language specifier
-            content = lm_out[start:end]
-            match = re.match(r"^\S*\n", content)
-            if match:
-                content = content[match.end() :]
-
-            return content.strip()
+            stripped = lm_out.strip()
+            if stripped.startswith("```"):
+                # Handle an incomplete opening block while dropping any language tag.
+                match = re.match(r"^```[^\n`]*\n?", lm_out)
+                if match:
+                    return lm_out[match.end() :].strip()
+            if stripped.endswith("```"):
+                # Handle an incomplete closing block.
+                return stripped[:-3].strip()
+            return stripped
 
         return {"new_instruction": extract_instruction_text()}

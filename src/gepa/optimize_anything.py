@@ -687,7 +687,7 @@ def _generate_seed_candidate(
     return {_STR_CANDIDATE_KEY: generated_text}
 
 
-optimize_anything_reflection_prompt_template: str = """I am optimizing a parameter in my system. The current parameter value is:
+optimize_anything_reflection_prompt_template: str = """I am optimizing a parameter in my system. This parameter may be a literal value or the text prompt/instruction used to guide how problems are solved. The current parameter value is:
 ```
 <curr_param>
 ```
@@ -697,7 +697,7 @@ Below is evaluation data showing how this parameter value performed across multi
 <side_info>
 ```
 
-Your task is to propose a new, improved parameter value that can be used as a drop-in replacement for the current one.
+Your task is to propose a new, improved parameter value, or improved problem-solving prompt text, that can be used as a drop-in replacement for the current one.
 
 Carefully analyze all the evaluation data provided above. Look for patterns that indicate what works and what doesn't. Pay special attention to:
 - Performance metrics and how they correlate with parameter behavior
@@ -706,9 +706,11 @@ Carefully analyze all the evaluation data provided above. Look for patterns that
 - Any domain-specific requirements, constraints, or factual information revealed in the evaluation data
 - Specific technical details that are crucial for understanding the parameter's role
 
-Based on your analysis, propose a new parameter value that addresses the identified issues while maintaining or improving upon what works well. Your proposal should be directly informed by the patterns and insights from the evaluation data.
+Based on your analysis, propose a new parameter value or prompt text that addresses the identified issues while maintaining or improving upon what works well. Your proposal should be directly informed by the patterns and insights from the evaluation data.
 
-Provide the new parameter value within ``` blocks."""
+Use ``` blocks only for the final new parameter value or prompt text. Do not use ``` blocks when quoting the current value or explaining your analysis.
+
+Provide only the new parameter value or prompt text within one final ``` block."""
 
 
 # --- Component 2: Proposer Configurations ---

@@ -34,3 +34,25 @@ def test_epoch_sampler_errors_when_loader_empty():
 
     with pytest.raises(ValueError):
         sampler.next_minibatch_ids(loader, state)
+
+
+def test_epoch_sampler_is_reproducible_for_same_seed():
+    loader = ListDataLoader([f"item-{i}" for i in range(12)])
+
+    def sample_sequence(seed: int) -> list[list[int]]:
+        sampler = EpochShuffledBatchSampler(minibatch_size=3, rng=random.Random(seed))
+        return [sampler.next_minibatch_ids(loader, SimpleNamespace(i=i)) for i in range(4)]
+
+    assert sample_sequence(7) == sample_sequence(7)
+
+
+def test_epoch_sampler_varies_across_seeds():
+    loader = ListDataLoader([f"item-{i}" for i in range(12)])
+
+    sampler_a = EpochShuffledBatchSampler(minibatch_size=3, rng=random.Random(7))
+    sampler_b = EpochShuffledBatchSampler(minibatch_size=3, rng=random.Random(8))
+
+    batch_a = sampler_a.next_minibatch_ids(loader, SimpleNamespace(i=0))
+    batch_b = sampler_b.next_minibatch_ids(loader, SimpleNamespace(i=0))
+
+    assert batch_a != batch_b

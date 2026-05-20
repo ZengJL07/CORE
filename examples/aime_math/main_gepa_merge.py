@@ -1,10 +1,12 @@
+import os
+
 from examples.aime_math.config import AIMEExperimentConfig
 from examples.aime_math.experiment import AIMEExperiment, BestPromptPrinter
 from gepa.optimize_anything import optimize_anything
 
 
 def main() -> None:
-    config = AIMEExperimentConfig.from_env("gepa")
+    config = AIMEExperimentConfig.from_env("gepa_merge")
     experiment = AIMEExperiment(config)
     experiment.print_startup_banner()
 
@@ -22,14 +24,22 @@ def main() -> None:
         )
         experiment.report_final_results(
             optimized_prompt,
-            label=f"gepa_candidate_{config.evaluate_candidate_idx}",
+            label=f"gepa_merge_candidate_{config.evaluate_candidate_idx}",
             output_stem=f"candidate_{config.evaluate_candidate_idx}_result_plot",
             run_dir=config.evaluate_existing_run_dir,
         )
         return
 
-    gepa_config = experiment.build_gepa_config(callbacks=[BestPromptPrinter()])
-    print("[AIME] Starting GEPA optimization...")
+    max_merge_invocations = int(os.environ.get("AIME_MAX_MERGE_INVOCATIONS", "5"))
+    merge_val_overlap_floor = int(os.environ.get("AIME_MERGE_VAL_OVERLAP_FLOOR", "5"))
+
+    gepa_config = experiment.build_gepa_config(
+        callbacks=[BestPromptPrinter()],
+        enable_merge=True,
+        max_merge_invocations=max_merge_invocations,
+        merge_val_overlap_floor=merge_val_overlap_floor,
+    )
+    print("[AIME] Starting GEPA merge variant optimization...")
     result = optimize_anything(
         seed_candidate=config.initial_prompt,
         evaluator=experiment.evaluate,
@@ -37,14 +47,14 @@ def main() -> None:
         valset=experiment.valset,
         config=gepa_config,
     )
-    print("[AIME] GEPA optimization finished.")
+    print("[AIME] GEPA merge variant optimization finished.")
     optimized_prompt, selected_candidate_idx = experiment.select_optimized_prompt(result)
     print(f"[AIME] Selected candidate index for final evaluation: {selected_candidate_idx}")
 
     experiment.report_final_results(
         optimized_prompt,
-        label="gepa",
-        output_stem="latest_run_result_plot",
+        label="gepa_merge",
+        output_stem="gepa_merge_result_plot",
     )
 
 

@@ -150,6 +150,7 @@ celerybeat.pid
 .venv
 env/
 venv/
+examples/aime_math/data/*.jsonl
 ENV/
 env.bak/
 venv.bak/
@@ -216,3 +217,6 @@ __marimo__/
 runs/
 outputs/
 gepa_terminus/
+logs/
+key
+result.list
