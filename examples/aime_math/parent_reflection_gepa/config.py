@@ -7,7 +7,7 @@ from examples.aime_math.config import _env_bool, _env_float, _env_int
 
 @dataclass(frozen=True)
 class ParentReflectionGEPAConfig:
-    candidate_pool_size: int = 5
+    candidate_pool_size: int = 20
     reflect_train_batch_size: int = 4
     probe_val_batch_size: int = 4
     max_outer_steps: int = 32
@@ -47,7 +47,7 @@ class ParentReflectionGEPAConfig:
     @classmethod
     def from_env(cls) -> "ParentReflectionGEPAConfig":
         return cls(
-            candidate_pool_size=_env_int("AIME_PRG_CANDIDATE_POOL_SIZE", 5),
+            candidate_pool_size=_env_int("AIME_PRG_CANDIDATE_POOL_SIZE", 20),
             reflect_train_batch_size=_env_int("AIME_PRG_REFLECT_TRAIN_BATCH_SIZE", 4),
             probe_val_batch_size=_env_int("AIME_PRG_PROBE_VAL_BATCH_SIZE", 4),
             max_outer_steps=_env_int("AIME_PRG_MAX_OUTER_STEPS", 32),
