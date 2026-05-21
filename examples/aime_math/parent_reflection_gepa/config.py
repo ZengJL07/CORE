@@ -9,12 +9,12 @@ from examples.aime_math.config import _env_bool, _env_float, _env_int
 class ParentReflectionGEPAConfig:
     candidate_pool_size: int = 20
     reflect_train_batch_size: int = 4
-    probe_val_batch_size: int = 4
+    probe_val_batch_size: int = 0
     max_outer_steps: int = 32
     score_sampling_temperature: float = 1.0
     num_parallel_branches: int = 4
-    ucb_exploration_coef: float = 0.25
-    prompt_ucb_exploration_coef: float = 0.25
+    ucb_exploration_coef: float = 0.4
+    prompt_ucb_exploration_coef: float = 0.4
     prompt_score_std_floor: float = 1e-3
     train_rejection_max_retries: int = 8
     val_rejection_max_retries: int = 8
@@ -49,12 +49,12 @@ class ParentReflectionGEPAConfig:
         return cls(
             candidate_pool_size=_env_int("AIME_PRG_CANDIDATE_POOL_SIZE", 20),
             reflect_train_batch_size=_env_int("AIME_PRG_REFLECT_TRAIN_BATCH_SIZE", 4),
-            probe_val_batch_size=_env_int("AIME_PRG_PROBE_VAL_BATCH_SIZE", 4),
+            probe_val_batch_size=_env_int("AIME_PRG_PROBE_VAL_BATCH_SIZE", 0),
             max_outer_steps=_env_int("AIME_PRG_MAX_OUTER_STEPS", 32),
             score_sampling_temperature=_env_float("AIME_PRG_SCORE_SAMPLING_TEMPERATURE", 1.0),
             num_parallel_branches=_env_int("AIME_PRG_NUM_PARALLEL_BRANCHES", 4),
-            ucb_exploration_coef=_env_float("AIME_PRG_UCB_EXPLORATION_COEF", 0.25),
-            prompt_ucb_exploration_coef=_env_float("AIME_PRG_PROMPT_UCB_EXPLORATION_COEF", 0.25),
+            ucb_exploration_coef=_env_float("AIME_PRG_UCB_EXPLORATION_COEF", 0.4),
+            prompt_ucb_exploration_coef=_env_float("AIME_PRG_PROMPT_UCB_EXPLORATION_COEF", 0.4),
             prompt_score_std_floor=_env_float("AIME_PRG_PROMPT_SCORE_STD_FLOOR", 1e-3),
             train_rejection_max_retries=_env_int("AIME_PRG_TRAIN_REJECTION_MAX_RETRIES", 8),
             val_rejection_max_retries=_env_int("AIME_PRG_VAL_REJECTION_MAX_RETRIES", 8),
