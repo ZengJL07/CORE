@@ -20,29 +20,43 @@ def _trajectory_digest(trajectory: TrajectoryRecord) -> str:
 
 
 class SuccessAnalyst:
-    def __init__(self, lm):
+    def __init__(self, lm, *, task):
         self.lm = lm
+        self.task = task
 
-    def analyze(self, prompt: str, trajectory: TrajectoryRecord) -> str | None:
-        response = self.lm(
-            f"""You are a success analyst in a Trace2Skill-style prompt distillation pipeline.
+    def _build_prompt(self, prompt: str, trajectory: TrajectoryRecord) -> str:
+        return f"""You are part of an optimization system that improves a given text (i.e. the variable). You are the gradient (feedback) engine.
+Your only responsibility is to give intelligent and creative feedback and constructive criticism to variables, given an objective specified in <OBJECTIVE_FUNCTION> tags.
+Only provide strategies, explanations, and methods to change in the variable. DO NOT propose a new version of the variable.
 
+You will give feedback to a variable with the following role: <ROLE>{self.task.trace2skill_variable_role_description()}</ROLE>.
+
+Here is an evaluation trajectory for the current variable:
+<CONVERSATION>
 Current prompt:
 <prompt>
 {prompt}
 </prompt>
 
-Analyze this SUCCESSFUL trajectory and extract one concise, generalizable improvement suggestion for the prompt.
-The suggestion must be applicable to future AIME-style math problems, not just this single example.
-If there is no useful generalizable lesson, return NONE.
-
 Trajectory:
 {_trajectory_digest(trajectory)}
+</CONVERSATION>
+
+<OBJECTIVE_FUNCTION>Your goal is to give feedback and criticism to the variable given the above evaluation output. Our only goal is to {self.task.trace2skill_trajectory_objective()}, and nothing else.</OBJECTIVE_FUNCTION>
+
+We are interested in giving feedback to the variable for this conversation. Specifically, give feedback to the following span of text:
+<VARIABLE>
+{prompt}
+</VARIABLE>
+
+{self.task.trace2skill_success_filter_instruction()}
 
 Return only:
 <suggestion>...</suggestion>
 """
-        )
+
+    def analyze(self, prompt: str, trajectory: TrajectoryRecord) -> str | None:
+        response = self.lm(self._build_prompt(prompt, trajectory))
         suggestion = extract_tagged_block(response, "suggestion") or response.strip()
         if suggestion.strip().upper() == "NONE":
             return None
@@ -50,34 +64,39 @@ Return only:
 
 
 class ErrorAnalyst:
-    def __init__(self, lm, max_turns: int):
+    def __init__(self, lm, max_turns: int, *, task):
         self.lm = lm
         self.max_turns = max_turns
+        self.task = task
 
-    def analyze(self, prompt: str, trajectory: TrajectoryRecord) -> str | None:
-        diagnosis_response = self.lm(
-            f"""You are an error analyst in a Trace2Skill-style prompt distillation pipeline.
+    def _build_diagnosis_prompt(self, prompt: str, trajectory: TrajectoryRecord) -> str:
+        return f"""You are part of an optimization system that improves a given text (i.e. the variable). You are the gradient (feedback) engine.
+Your only responsibility is to give intelligent and creative feedback and constructive criticism to variables, given an objective specified in <OBJECTIVE_FUNCTION> tags.
+Only provide strategies, explanations, and methods to change in the variable. DO NOT propose a new version of the variable.
 
+You will give feedback to a variable with the following role: <ROLE>{self.task.trace2skill_variable_role_description()}</ROLE>.
+
+Here is an evaluation trajectory for the current variable:
+<CONVERSATION>
 Current prompt:
 <prompt>
 {prompt}
 </prompt>
 
-Analyze this FAILED trajectory. Identify the most likely root cause in the current prompt, using only evidence from
-the trajectory and feedback. Focus on a lesson that could improve future AIME-style math problems.
-
 Trajectory:
 {_trajectory_digest(trajectory)}
+</CONVERSATION>
+
+<OBJECTIVE_FUNCTION>Your goal is to give feedback and criticism to the variable given the above evaluation output. Our only goal is to {self.task.trace2skill_trajectory_objective()}, and nothing else.</OBJECTIVE_FUNCTION>
+
+{self.task.trace2skill_diagnosis_focus_instruction()} Identify the most likely root cause in the variable using only evidence from the trajectory.
 
 Return only:
 <analysis>...</analysis>
 """
-        )
-        diagnosis = extract_tagged_block(diagnosis_response, "analysis") or diagnosis_response.strip()
 
-        for _ in range(max(0, self.max_turns - 2)):
-            refinement_response = self.lm(
-                f"""Refine the following failure diagnosis so it stays causal, concise, and generalizable.
+    def _build_refinement_prompt(self, diagnosis: str, trajectory: TrajectoryRecord) -> str:
+        return f"""Refine the following failure diagnosis so it stays causal, concise, and generalizable.
 
 Current diagnosis:
 <analysis>
@@ -90,13 +109,9 @@ Trajectory:
 Return only:
 <analysis>...</analysis>
 """
-            )
-            refined = extract_tagged_block(refinement_response, "analysis") or refinement_response.strip()
-            if refined:
-                diagnosis = refined
 
-        suggestion_response = self.lm(
-            f"""You are finishing an error-analysis pass in a Trace2Skill-style prompt distillation pipeline.
+    def _build_suggestion_prompt(self, prompt: str, diagnosis: str, trajectory: TrajectoryRecord) -> str:
+        return f"""You are finishing a feedback pass in an optimization system that improves a variable.
 
 Current prompt:
 <prompt>
@@ -109,7 +124,7 @@ Failure diagnosis:
 </analysis>
 
 Turn the diagnosis into one concise, direct improvement suggestion for the prompt.
-The suggestion must be generalizable beyond this example. If no safe generalizable lesson exists, return NONE.
+{self.task.trace2skill_suggestion_instruction()}
 
 Trajectory:
 {_trajectory_digest(trajectory)}
@@ -117,7 +132,18 @@ Trajectory:
 Return only:
 <suggestion>...</suggestion>
 """
-        )
+
+    def analyze(self, prompt: str, trajectory: TrajectoryRecord) -> str | None:
+        diagnosis_response = self.lm(self._build_diagnosis_prompt(prompt, trajectory))
+        diagnosis = extract_tagged_block(diagnosis_response, "analysis") or diagnosis_response.strip()
+
+        for _ in range(max(0, self.max_turns - 2)):
+            refinement_response = self.lm(self._build_refinement_prompt(diagnosis, trajectory))
+            refined = extract_tagged_block(refinement_response, "analysis") or refinement_response.strip()
+            if refined:
+                diagnosis = refined
+
+        suggestion_response = self.lm(self._build_suggestion_prompt(prompt, diagnosis, trajectory))
         suggestion = extract_tagged_block(suggestion_response, "suggestion") or suggestion_response.strip()
         if suggestion.strip().upper() == "NONE":
             return None
@@ -128,8 +154,12 @@ class ParallelAnalystRunner:
     def __init__(self, experiment: Any, output_dir: Path, error_analyst_max_turns: int):
         self.experiment = experiment
         self.output_dir = output_dir
-        self.success_analyst = SuccessAnalyst(experiment.reflection_lm)
-        self.error_analyst = ErrorAnalyst(experiment.reflection_lm, max_turns=error_analyst_max_turns)
+        self.success_analyst = SuccessAnalyst(experiment.reflection_lm, task=experiment.task)
+        self.error_analyst = ErrorAnalyst(
+            experiment.reflection_lm,
+            max_turns=error_analyst_max_turns,
+            task=experiment.task,
+        )
 
     def analyze(
         self,

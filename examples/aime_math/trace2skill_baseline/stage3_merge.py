@@ -7,9 +7,47 @@ from examples.aime_math.trace2skill_baseline.utils import extract_tagged_block, 
 
 
 class SuggestionMerger:
-    def __init__(self, lm, output_dir: Path):
+    def __init__(self, lm, output_dir: Path, *, task):
         self.lm = lm
         self.output_dir = output_dir
+        self.task = task
+
+    def _build_merge_prompt(self, current_prompt: str, group: list[str]) -> str:
+        return f"""You are consolidating prompt-improvement suggestions in a Trace2Skill-style baseline.
+
+Current prompt:
+<prompt>
+{current_prompt}
+</prompt>
+
+{self.task.trace2skill_merge_instruction()}
+
+Suggestions:
+{self._format_group(group)}
+
+Return only:
+<merged_suggestion>...</merged_suggestion>
+"""
+
+    def _build_rewrite_prompt(self, current_prompt: str, final_suggestion: str) -> str:
+        return f"""You are rewriting a {self.task.trace2skill_rewrite_role_description()} after Trace2Skill-style consolidation.
+
+Current prompt:
+<prompt>
+{current_prompt}
+</prompt>
+
+Consolidated improvement suggestion:
+<suggestion>
+{final_suggestion}
+</suggestion>
+
+Rewrite the current prompt so it incorporates the consolidated suggestion while staying concise and directly usable as
+the next system prompt. Keep the result as a single prompt string, not a skill file or multi-section document.
+
+Return only:
+<prompt>...</prompt>
+"""
 
     def merge_into_prompt(
         self,
@@ -29,25 +67,7 @@ class SuggestionMerger:
             next_level = []
             for group_start in range(0, len(active), merge_fanin):
                 group = active[group_start : group_start + merge_fanin]
-                response = self.lm(
-                    f"""You are consolidating prompt-improvement suggestions in a Trace2Skill-style baseline.
-
-Current prompt:
-<prompt>
-{current_prompt}
-</prompt>
-
-Below is a small group of trajectory-local improvement suggestions for the prompt.
-Merge them into one concise, conflict-free, generalizable consolidated suggestion.
-Prefer recurring patterns. Drop advice that looks too instance-specific or redundant.
-
-Suggestions:
-{self._format_group(group)}
-
-Return only:
-<merged_suggestion>...</merged_suggestion>
-"""
-                )
+                response = self.lm(self._build_merge_prompt(current_prompt, group))
                 merged = extract_tagged_block(response, "merged_suggestion") or response.strip()
                 if not merged:
                     merged = "\n".join(group)
@@ -65,26 +85,7 @@ Return only:
             level += 1
 
         final_suggestion = active[0]
-        rewrite_response = self.lm(
-            f"""You are rewriting a math-solving prompt after Trace2Skill-style consolidation.
-
-Current prompt:
-<prompt>
-{current_prompt}
-</prompt>
-
-Consolidated improvement suggestion:
-<suggestion>
-{final_suggestion}
-</suggestion>
-
-Rewrite the current prompt so it incorporates the consolidated suggestion while staying concise and directly usable as
-the next system prompt. Keep the result as a single prompt string, not a skill file or multi-section document.
-
-Return only:
-<prompt>...</prompt>
-"""
-        )
+        rewrite_response = self.lm(self._build_rewrite_prompt(current_prompt, final_suggestion))
         rewritten_prompt = extract_tagged_block(rewrite_response, "prompt") or rewrite_response.strip()
         if not rewritten_prompt:
             rewritten_prompt = current_prompt

@@ -138,7 +138,7 @@ class OriginalTextGradRunner:
         evaluation_instruction = tg.Variable(
             self.experiment.task.textgrad_evaluation_instruction(),
             requires_grad=False,
-            role_description="evaluation instruction for AIME prompt optimization",
+            role_description="evaluation instruction for prompt optimization",
         )
         return MultiFieldEvaluation(
             evaluation_instruction,
@@ -164,7 +164,7 @@ class OriginalTextGradRunner:
             requires_grad=True,
             role_description=(
                 "structured system prompt to a somewhat capable language model that specifies behavior and strategies "
-                "for solving AIME-style math problems"
+                "for solving task instances"
             ),
         )
         model = tg.BlackboxLLM(self.forward_engine, system_prompt)

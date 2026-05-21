@@ -11,6 +11,13 @@ from typing import Any
 
 import dspy
 from dspy.utils.exceptions import AdapterParseError
+import sympy as sp
+from sympy.parsing.latex import parse_latex
+from sympy.parsing.sympy_parser import (
+    implicit_multiplication_application,
+    parse_expr,
+    standard_transformations,
+)
 
 from datasets import load_dataset
 from examples.aime_math.config import DEFAULT_DEEPSEEK_API_BASE, DEFAULT_SHARED_CACHE_API_KEY
@@ -96,6 +103,37 @@ class PromptOptimizationDatasetTask:
     def make_reflection_instruction(self, current_prompt: str, current_batch_feedback: str, current_batch_score: float) -> str:
         return current_prompt
 
+    def trace2skill_trajectory_objective(self) -> str:
+        return "improve task performance"
+
+    def trace2skill_variable_role_description(self) -> str:
+        return "system prompt to a language model"
+
+    def trace2skill_success_filter_instruction(self) -> str:
+        return (
+            "This trajectory is SUCCESSFUL. Only return a suggestion if there is a concise, generalizable lesson "
+            "that is likely to improve future trajectories. Otherwise return NONE."
+        )
+
+    def trace2skill_diagnosis_focus_instruction(self) -> str:
+        return "We are interested in diagnosing why the current variable underperformed on this trajectory."
+
+    def trace2skill_suggestion_instruction(self) -> str:
+        return (
+            "Turn the diagnosis into one concise, direct improvement suggestion for the prompt. "
+            "The suggestion must be generalizable beyond this example. If no safe generalizable lesson exists, return NONE."
+        )
+
+    def trace2skill_merge_instruction(self) -> str:
+        return (
+            "Below is a small group of trajectory-local improvement suggestions for the prompt.\n"
+            "Merge them into one concise, conflict-free, generalizable consolidated suggestion.\n"
+            "Prefer recurring patterns. Drop advice that looks too instance-specific or redundant."
+        )
+
+    def trace2skill_rewrite_role_description(self) -> str:
+        return "system prompt"
+
     def textgrad_evaluation_instruction(self) -> str:
         raise NotImplementedError
 
@@ -148,8 +186,10 @@ def _build_solver_instructions(prompt: str, include_reasoning: bool, *, output_m
         "Output format requirements (must follow exactly):\n"
         "- Return ONLY a valid JSON object.\n"
         f"- Include exactly these keys: {fields_hint}.\n"
-        "- `answer` must be an integer string with no extra text.\n"
-        "- Do not output a set, list, multiple answers, markdown, or a full solution.\n"
+        "- `answer` must contain only the final exact answer, with no extra prose.\n"
+        "- Use a plain integer when the problem asks for an integer answer; otherwise use a single exact mathematical expression.\n"
+        "- Allowed exact forms include integers, fractions, radicals, `pi`, factorials, or comma-separated exact values when the problem has multiple answers.\n"
+        "- Do not output markdown or a full solution inside `answer`.\n"
         f"- Example format: {schema_hint}\n"
     )
 
@@ -193,9 +233,29 @@ def _prediction_from_payload(payload: dict, *, output_mode: str = "integer") -> 
     )
 
 
+def _reextract_cached_prediction(payload: dict, *, output_mode: str = "integer") -> dspy.Prediction:
+    prediction = _prediction_from_payload(payload, output_mode=output_mode)
+    answer = str(getattr(prediction, "answer", "")).strip()
+    if answer and not answer.startswith('": "'):
+        return prediction
+
+    raw_candidates = [
+        str(payload.get("answer", "")).strip(),
+        str(payload.get("reasoning", "")).strip(),
+    ]
+    for candidate in raw_candidates:
+        reparsed = _prediction_from_raw_lm_response(candidate, output_mode=output_mode)
+        if reparsed is None:
+            continue
+        reparsed_answer = str(getattr(reparsed, "answer", "")).strip()
+        if reparsed_answer:
+            return reparsed
+    return prediction
+
+
 def _normalize_prediction_fields(answer: str, reasoning: str = "", *, output_mode: str = "integer") -> tuple[str, str]:
     """Normalize nested structured answers into the plain integer answer field."""
-    answer = str(answer).strip()
+    answer = _repair_partial_answer_fragment(str(answer).strip())
     reasoning = str(reasoning)
 
     for _ in range(2):
@@ -224,16 +284,36 @@ def _normalize_prediction_fields(answer: str, reasoning: str = "", *, output_mod
             return generic_fence.group(1).strip(), reasoning
         return answer.strip(), reasoning
 
-    boxed_matches = re.findall(r"\\boxed\{(-?\d+)\}", answer)
-    if boxed_matches:
-        return boxed_matches[-1], reasoning or answer[:1000]
+    boxed_expr = _extract_boxed_expression(answer)
+    if boxed_expr is not None:
+        return boxed_expr, reasoning or answer[:1000]
 
     if not re.fullmatch(r"-?\d+", answer):
-        answer_matches = re.findall(r"(?i)(?:final answer|answer)\D{0,20}(-?\d+)", answer)
-        if answer_matches:
-            return answer_matches[-1], reasoning or answer[:1000]
+        answer_match = re.search(r"(?is)(?:final answer|answer)\s*[:=]?\s*(.+)$", answer)
+        if answer_match:
+            return answer_match.group(1).strip(), reasoning or answer[:1000]
 
     return answer, reasoning
+
+
+def _repair_partial_answer_fragment(answer: str) -> str:
+    if not answer:
+        return answer
+
+    stripped = answer.strip()
+    partial_json_match = re.search(r'"\s*:\s*"(?P<value>.*?)"\s*}?\s*(?:```)?\s*$', stripped, flags=re.DOTALL)
+    if partial_json_match:
+        return partial_json_match.group("value").strip()
+
+    partial_json_open_match = re.search(r'"\s*:\s*"(?P<value>.+)$', stripped, flags=re.DOTALL)
+    if partial_json_open_match:
+        return partial_json_open_match.group("value").strip()
+
+    answer_key_match = re.search(r'"answer"\s*:\s*"(?P<value>.*?)"', stripped, flags=re.DOTALL)
+    if answer_key_match:
+        return answer_key_match.group("value").strip()
+
+    return stripped
 
 
 def _raw_lm_response_from_parse_error(exc: AdapterParseError) -> str:
@@ -290,17 +370,9 @@ def _prediction_from_raw_lm_response(raw_response: str, *, output_mode: str = "i
         return dspy.Prediction(answer=str(payload), reasoning="")
 
     stripped = raw_response.strip()
-    if re.fullmatch(r"-?\d+", stripped):
-        return dspy.Prediction(answer=stripped, reasoning="")
-
-    boxed_matches = re.findall(r"\\boxed\{(-?\d+)\}", stripped)
-    if boxed_matches:
-        return dspy.Prediction(answer=boxed_matches[-1], reasoning=stripped[:1000])
-
-    answer_matches = re.findall(r"(?i)(?:final answer|answer)\D{0,20}(-?\d+)", stripped)
-    if answer_matches:
-        return dspy.Prediction(answer=answer_matches[-1], reasoning=stripped[:1000])
-
+    answer, reasoning = _normalize_prediction_fields(stripped, "", output_mode=output_mode)
+    if answer:
+        return dspy.Prediction(answer=answer, reasoning=reasoning)
     return None
 
 
@@ -709,7 +781,7 @@ class MathSolverClient:
                     with cache_path.open("r", encoding="utf-8") as f:
                         payload = json.load(f)
                     payload_output_mode = str(payload.get("output_mode", self.output_mode))
-                    return _prediction_from_payload(payload, output_mode=payload_output_mode)
+                    return _reextract_cached_prediction(payload, output_mode=payload_output_mode)
                 except (OSError, json.JSONDecodeError):
                     continue
             return None
@@ -977,23 +1049,212 @@ def run_llm(
 
 def math_metric(example, prediction):
     """Compute score and detailed feedback for math problems."""
-    correct_answer, written_solution = int(example.answer), getattr(example, "solution", "")
+    correct_answer = str(getattr(example, "answer", "")).strip()
+    written_solution = getattr(example, "solution", "")
     solution_suffix = (
         f" Here's the full step-by-step solution:\n{written_solution}\n\nThink about what takeaways you can learn from this solution to improve your future answers and approach to similar problems"
         if written_solution
         else ""
     )
+    prediction_answer = str(getattr(prediction, "answer", "")).strip()
 
-    try:
-        llm_answer = int(prediction.answer)
-    except (ValueError, TypeError):
-        feedback_text = f"The final answer must be a valid integer and nothing else. You responded with '{prediction.answer}', which couldn't be parsed as a python integer. Please ensure your answer is a valid integer without any additional text or formatting. The correct answer is '{correct_answer}'.{solution_suffix}{' and ensure your final answer is a valid integer.' if written_solution else ''}"
+    exact_match, expects_integer = _math_answers_match(correct_answer, prediction_answer)
+    if exact_match is None:
+        if expects_integer:
+            feedback_text = (
+                f"The final answer must be a valid integer and nothing else. You responded with '{prediction_answer}', "
+                f"which couldn't be parsed as a python integer. Please ensure your answer is a valid integer without "
+                f"any additional text or formatting. The correct answer is '{correct_answer}'."
+                f"{solution_suffix}{' and ensure your final answer is a valid integer.' if written_solution else ''}"
+            )
+            return 0.0, feedback_text
+        feedback_text = (
+            f"The final answer must be a valid mathematical expression matching the expected value. You responded with "
+            f"'{prediction_answer}', which couldn't be parsed reliably. Please provide only the final exact answer, "
+            f"using standard mathematical notation such as integers, fractions, radicals, factorials, or comma-separated "
+            f"exact values when the problem has multiple answers. The correct answer is '{correct_answer}'.{solution_suffix}"
+        )
         return 0.0, feedback_text
 
-    score = float(correct_answer == llm_answer)
+    score = float(exact_match)
     status = "correct" if score == 1.0 else "incorrect"
     feedback_text = f"Your answer is {status}. The correct answer is '{correct_answer}'.{solution_suffix}"
     return score, feedback_text
+
+
+def _math_answers_match(correct_answer: str, prediction_answer: str) -> tuple[bool | None, bool]:
+    expects_integer = _looks_like_integer_answer(correct_answer)
+
+    if expects_integer:
+        try:
+            return int(correct_answer) == int(prediction_answer), True
+        except (ValueError, TypeError):
+            return None, True
+
+    expected_values = _parse_math_answer_set(correct_answer)
+    predicted_values = _parse_math_answer_set(prediction_answer)
+    if expected_values is None or predicted_values is None:
+        return None, False
+    if len(expected_values) != len(predicted_values):
+        return False, False
+    return _multiset_expr_equal(expected_values, predicted_values), False
+
+
+def _looks_like_integer_answer(answer: str) -> bool:
+    return bool(re.fullmatch(r"-?\d+", str(answer).strip()))
+
+
+def _multiset_expr_equal(left: list[sp.Expr], right: list[sp.Expr]) -> bool:
+    used = [False] * len(right)
+    for left_expr in left:
+        matched = False
+        for idx, right_expr in enumerate(right):
+            if used[idx]:
+                continue
+            if _expr_equal(left_expr, right_expr):
+                used[idx] = True
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
+def _expr_equal(left: sp.Expr, right: sp.Expr) -> bool:
+    try:
+        return bool(sp.simplify(left - right) == 0)
+    except Exception:
+        return False
+
+
+def _parse_math_answer_set(answer: str) -> list[sp.Expr] | None:
+    normalized = _normalize_math_answer_text(answer)
+    if not normalized:
+        return None
+    parts = [part.strip() for part in normalized.split(",") if part.strip()]
+    if not parts:
+        return None
+
+    expressions: list[sp.Expr] = []
+    for part in parts:
+        expr = _parse_math_expression(part)
+        if expr is None:
+            return None
+        expressions.append(expr)
+    return expressions
+
+
+def _normalize_math_answer_text(answer: str) -> str:
+    text = str(answer).strip()
+    if not text:
+        return ""
+    fenced = re.fullmatch(r"```(?:text|latex)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    boxed_expr = _extract_boxed_expression(text)
+    if boxed_expr is not None:
+        text = boxed_expr.strip()
+    answer_match = re.search(r"(?is)(?:final answer|answer)\s*[:=]?\s*(.+)$", text)
+    if answer_match:
+        text = answer_match.group(1).strip()
+    text = text.replace("$", "").strip()
+    return text
+
+
+def _parse_math_expression(expr_text: str) -> sp.Expr | None:
+    stripped = str(expr_text).strip()
+    if not stripped:
+        return None
+    try:
+        return parse_latex(stripped)
+    except Exception:
+        pass
+
+    transformed = _latexish_to_sympy_expr(expr_text)
+    if not transformed:
+        return None
+    try:
+        return parse_expr(
+            transformed,
+            local_dict={"pi": sp.pi, "e": sp.E, "sqrt": sp.sqrt, "factorial": sp.factorial},
+            transformations=standard_transformations + (implicit_multiplication_application,),
+            evaluate=True,
+        )
+    except Exception:
+        return None
+
+
+def _latexish_to_sympy_expr(text: str) -> str:
+    expr = str(text).strip()
+    expr = expr.replace("\\left", "").replace("\\right", "")
+    expr = expr.replace("\\cdot", "*").replace("\\times", "*")
+    expr = expr.replace("\\pi", "pi")
+    expr = re.sub(r"√\s*([A-Za-z0-9]+)", r"sqrt(\1)", expr)
+    expr = expr.replace("^", "**")
+    expr = _replace_latex_frac(expr)
+    expr = _replace_latex_sqrt(expr)
+    expr = re.sub(r"(\d+)\s*!", r"factorial(\1)", expr)
+    expr = re.sub(r"\s+", "", expr)
+    return expr
+
+
+def _replace_latex_frac(expr: str) -> str:
+    pattern = r"\\frac\s*\{"
+    while True:
+        match = re.search(pattern, expr)
+        if match is None:
+            return expr
+        start = match.start()
+        num_start = match.end() - 1
+        numerator, num_end = _extract_braced(expr, num_start)
+        if numerator is None:
+            return expr
+        if num_end >= len(expr) or expr[num_end] != "{":
+            return expr
+        denominator, den_end = _extract_braced(expr, num_end)
+        if denominator is None:
+            return expr
+        replacement = f"(({numerator})/({denominator}))"
+        expr = expr[:start] + replacement + expr[den_end:]
+
+
+def _replace_latex_sqrt(expr: str) -> str:
+    pattern = r"\\sqrt\s*\{"
+    while True:
+        match = re.search(pattern, expr)
+        if match is None:
+            return expr
+        start = match.start()
+        inner_start = match.end() - 1
+        inner, inner_end = _extract_braced(expr, inner_start)
+        if inner is None:
+            return expr
+        replacement = f"sqrt({inner})"
+        expr = expr[:start] + replacement + expr[inner_end:]
+
+
+def _extract_braced(text: str, start_idx: int) -> tuple[str | None, int]:
+    if start_idx >= len(text) or text[start_idx] != "{":
+        return None, start_idx
+    depth = 0
+    for idx in range(start_idx, len(text)):
+        char = text[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start_idx + 1 : idx], idx + 1
+    return None, start_idx
+
+
+def _extract_boxed_expression(text: str) -> str | None:
+    marker = "\\boxed{"
+    start = text.rfind(marker)
+    if start == -1:
+        return None
+    inner, _end = _extract_braced(text, start + len("\\boxed"))
+    return inner
 
 
 def _format_mbpp_assert_failure(error_message: str) -> str:
@@ -1662,10 +1923,12 @@ class MBPPTask(PromptOptimizationDatasetTask):
 
     def textgrad_evaluation_instruction(self) -> str:
         return (
-            "Below is an MBPP programming task, the reference solution, and the Python code generated by the language model "
-            "along with execution feedback from running unit tests. Critically evaluate the generated code. Identify the "
-            "most important correctness bugs, missing imports, signature mismatches, test failures, and runtime errors. "
-            "Give concise, actionable feedback that would help improve the system prompt for future MBPP code-generation tasks."
+            "You are analyzing Python code generated for an MBPP programming task together with unit test results. "
+            "The code may be tested with harder hidden tests, so do not only check whether it passes the provided tests. "
+            "Investigate correctness, required function signatures, imports, runtime behavior, and likely failure modes on "
+            "slightly harder cases. For each failed test, explain why the current implementation does not produce the expected "
+            "behavior. Do not provide a revised implementation. Give very concise, actionable feedback that would help improve "
+            "the system prompt for future MBPP code-generation tasks."
         )
 
     def generate_model_output(

@@ -35,9 +35,10 @@ class FakeAnalystRunner:
 
 
 class FakeMerger:
-    def __init__(self, reflection_lm, output_dir):
+    def __init__(self, reflection_lm, output_dir, *, task):
         self.reflection_lm = reflection_lm
         self.output_dir = output_dir
+        self.task = task
 
     def merge_into_prompt(self, current_prompt: str, suggestions, *, merge_fanin: int, iteration_idx: int):
         return f"{current_prompt} -> iter {iteration_idx}", [{"round": 1, "count": len(suggestions)}]
@@ -50,6 +51,28 @@ class FakeExperiment:
             max_metric_calls=10,
             run_dir=run_dir,
             seed=0,
+            dataset_name="aime",
+        )
+        self.task = SimpleNamespace(
+            trace2skill_variable_role_description=lambda: "system prompt to a language model",
+            trace2skill_trajectory_objective=lambda: "improve task performance",
+            trace2skill_success_filter_instruction=lambda: (
+                "This trajectory is SUCCESSFUL. Only return a suggestion if there is a concise, "
+                "generalizable lesson that is likely to improve future trajectories. Otherwise return NONE."
+            ),
+            trace2skill_diagnosis_focus_instruction=lambda: (
+                "We are interested in diagnosing why the current variable underperformed on this trajectory."
+            ),
+            trace2skill_suggestion_instruction=lambda: (
+                "Turn the diagnosis into one concise, direct improvement suggestion for the prompt. "
+                "The suggestion must be generalizable beyond this example. If no safe generalizable lesson exists, return NONE."
+            ),
+            trace2skill_merge_instruction=lambda: (
+                "Below is a small group of trajectory-local improvement suggestions for the prompt.\n"
+                "Merge them into one concise, conflict-free, generalizable consolidated suggestion.\n"
+                "Prefer recurring patterns. Drop advice that looks too instance-specific or redundant."
+            ),
+            trace2skill_rewrite_role_description=lambda: "system prompt",
         )
         self.trainset = [SimpleNamespace(input="train-1"), SimpleNamespace(input="train-2")]
         self.valset = [SimpleNamespace(input="val-1"), SimpleNamespace(input="val-2"), SimpleNamespace(input="val-3")]
@@ -127,3 +150,43 @@ def test_trace2skill_budget_counts_rollout_and_validation(monkeypatch, tmp_path)
             "merge_rounds": 1,
         },
     ]
+
+
+def test_trace2skill_prompts_use_task_hooks() -> None:
+    from examples.aime_math.trace2skill_baseline.stage2_analysts import ErrorAnalyst, SuccessAnalyst
+    from examples.aime_math.trace2skill_baseline.stage3_merge import SuggestionMerger
+
+    task = SimpleNamespace(
+        trace2skill_variable_role_description=lambda: "task-specific system prompt",
+        trace2skill_trajectory_objective=lambda: "improve held-out task performance",
+        trace2skill_success_filter_instruction=lambda: "SUCCESS FILTER",
+        trace2skill_diagnosis_focus_instruction=lambda: "DIAGNOSIS FOCUS",
+        trace2skill_suggestion_instruction=lambda: "SUGGESTION INSTRUCTION",
+        trace2skill_merge_instruction=lambda: "MERGE INSTRUCTION",
+        trace2skill_rewrite_role_description=lambda: "task prompt",
+    )
+    trajectory = SimpleNamespace(
+        input_text="Write a function.",
+        gold_answer="def foo():\n    pass",
+        model_answer="def foo():\n    return None",
+        reasoning="",
+        score=0.0,
+        feedback="Failed unit tests.",
+    )
+
+    success_prompt = SuccessAnalyst(object(), task=task)._build_prompt("prompt", trajectory)
+    error_prompt = ErrorAnalyst(object(), 2, task=task)._build_diagnosis_prompt("prompt", trajectory)
+    suggestion_prompt = ErrorAnalyst(object(), 2, task=task)._build_suggestion_prompt("prompt", "diag", trajectory)
+    merge_prompt = SuggestionMerger(object(), Path("/tmp"), task=task)._build_merge_prompt(
+        "prompt",
+        ["suggestion 1"],
+    )
+    rewrite_prompt = SuggestionMerger(object(), Path("/tmp"), task=task)._build_rewrite_prompt("prompt", "s")
+
+    assert "task-specific system prompt" in success_prompt
+    assert "improve held-out task performance" in success_prompt
+    assert "SUCCESS FILTER" in success_prompt
+    assert "DIAGNOSIS FOCUS" in error_prompt
+    assert "SUGGESTION INSTRUCTION" in suggestion_prompt
+    assert "MERGE INSTRUCTION" in merge_prompt
+    assert "task prompt" in rewrite_prompt

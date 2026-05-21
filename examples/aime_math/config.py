@@ -21,7 +21,7 @@ DEFAULT_MBPP_HF_CONFIG = "full"
 DEFAULT_HMMT_FEB_2025_TEST_DATASET = "MathArena/hmmt_feb_2025"
 DEFAULT_HMMT_FEB_2026_TEST_DATASET = "MathArena/hmmt_feb_2026"
 DEFAULT_INITIAL_PROMPTS = {
-    "aime": "Try to solve the math problem carefully. Break down the steps and provide the final answer as a single number.",
+    "aime": "Try to solve the math problem carefully. Break down the steps and provide the final answer as a single exact answer.",
     "mbpp": (
         "Try to solve the Python programming task carefully. "
         "If a required function name is provided in the task, you must define exactly that function name. "

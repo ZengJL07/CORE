@@ -413,3 +413,50 @@ def test_base_solver_cache_hit_skips_cross_root_index_build(monkeypatch, tmp_pat
     prediction = run_llm(example, prompt, use_solver_cache=True)
     assert prediction.answer == "2"
     assert client.calls == 0
+
+
+def test_cached_prediction_is_reextracted_on_cache_hit(monkeypatch, tmp_path):
+    dspy = pytest.importorskip("dspy")
+    from examples.aime_math.utils import MathSolverClient, _prediction_cache_key, run_llm
+
+    cache_namespace = {
+        "solver_backend": "litellm_deepseek_json_v1",
+        "model": "openai/deepseek-chat",
+        "temperature": 0.2,
+        "max_tokens": 32000,
+        "backend": "parent_reflection_gepa",
+    }
+
+    problem_input = "cached broken answer"
+    prompt = "solve"
+    cache_path = tmp_path / f"{_prediction_cache_key(problem_input, prompt, cache_namespace, None)}.json"
+    cache_path.write_text(
+        (
+            "{\n"
+            f'  "input": {problem_input!r},\n'
+            f'  "prompt": {prompt!r},\n'
+            '  "answer": "\\": \\"3375\\"\\n}\\n```",\n'
+            '  "reasoning": "cached",\n'
+            '  "source": "test",\n'
+            f'  "namespace": {cache_namespace!r}\n'
+            "}\n"
+        ).replace("'", '"'),
+        encoding="utf-8",
+    )
+
+    class GuardedSolverClient(MathSolverClient):
+        def __init__(self, cache_dir: Path):
+            super().__init__(cache_dir=cache_dir, cache_namespace=cache_namespace, enable_cache=True)
+            self.calls = 0
+
+        def _call_solver(self, example, instructions: str, include_reasoning: bool):
+            self.calls += 1
+            return dspy.Prediction(answer=str(example.answer), reasoning="live")
+
+    client = GuardedSolverClient(tmp_path)
+    monkeypatch.setattr("examples.aime_math.utils._DEFAULT_SOLVER_CLIENT", client)
+    example = dspy.Example(input=problem_input, answer="3375").with_inputs("input")
+
+    prediction = run_llm(example, prompt, use_solver_cache=True)
+    assert prediction.answer == "3375"
+    assert client.calls == 0

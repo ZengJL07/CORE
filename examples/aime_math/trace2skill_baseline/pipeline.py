@@ -41,7 +41,11 @@ class Trace2SkillBaselineRunner:
             self.output_dir,
             error_analyst_max_turns=self.baseline_config.error_analyst_max_turns,
         )
-        merger = SuggestionMerger(self.experiment.reflection_lm, self.output_dir)
+        merger = SuggestionMerger(
+            self.experiment.reflection_lm,
+            self.output_dir,
+            task=self.experiment.task,
+        )
 
         rng = random.Random(self.experiment.config.seed)
         remaining_budget = self.experiment.config.max_metric_calls
