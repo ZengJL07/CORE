@@ -34,6 +34,10 @@ export AIME_PRG_PROBE_VAL_BATCH_SIZE="${AIME_PRG_PROBE_VAL_BATCH_SIZE:-0}"
 export AIME_PRG_MAX_OUTER_STEPS="${AIME_PRG_MAX_OUTER_STEPS:-8}"
 export AIME_PRG_NUM_PARALLEL_BRANCHES="${AIME_PRG_NUM_PARALLEL_BRANCHES:-5}"
 
+# Disable parent reflection so prompt_ucb mutates from the current prompt + feedback only,
+# matching GEPA's reflection inputs (no parent prompt/reflection history injected).
+export AIME_PRG_USE_PARENT_HISTORY="${AIME_PRG_USE_PARENT_HISTORY:-false}"
+
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:?Please set DEEPSEEK_API_KEY}"
 export DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}"
 export AIME_DEEPSEEK_MODEL="${AIME_DEEPSEEK_MODEL:-openai/deepseek-chat}"
