@@ -4,6 +4,7 @@ import os
 import random
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,64 @@ TEST_SOLVER_MODEL_PREFIX = "test://"
 TEST_REFLECTION_MODEL_PREFIX = "test://"
 HMMT_FEB_2025_DATASET = "MathArena/hmmt_feb_2025"
 HMMT_FEB_2026_DATASET = "MathArena/hmmt_feb_2026"
+
+# Default number of attempts for transient API failures (connection resets,
+# 5xx, SSL EOF, rate limits, ...). Overridable per-client and via env vars in
+# the launch scripts (AIME_SOLVER_API_MAX_RETRIES / AIME_REFLECTION_API_MAX_RETRIES).
+DEFAULT_API_MAX_RETRIES = 5
+# Exponential backoff bounds (seconds) used between transient-failure retries.
+_API_RETRY_BASE_DELAY = 1.0
+_API_RETRY_MAX_DELAY = 30.0
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    """Exponential backoff with a small deterministic jitter for retry ``attempt`` (1-indexed)."""
+    delay = min(_API_RETRY_BASE_DELAY * (2 ** (attempt - 1)), _API_RETRY_MAX_DELAY)
+    # Deterministic jitter (no global RNG dependency) keyed on the attempt index.
+    jitter = (hash(("api_retry_jitter", attempt)) % 1000) / 1000.0 * 0.25 * delay
+    return delay + jitter
+
+
+def call_with_transient_retries(
+    func,
+    *,
+    max_retries: int,
+    description: str,
+    log_prefix: str = "[AIME]",
+):
+    """Call ``func`` retrying only on transient (non-parse) exceptions.
+
+    ``max_retries`` is the total number of attempts (>=1). ``AdapterParseError``
+    is re-raised immediately so callers can run their own answer-recovery logic;
+    every other exception is treated as transient and retried with exponential
+    backoff until the attempts are exhausted, then re-raised.
+    """
+    attempts = max(1, int(max_retries))
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return func()
+        except AdapterParseError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            first_line = str(exc).splitlines()[0][:200] if str(exc) else ""
+            if attempt < attempts:
+                delay = _retry_delay_seconds(attempt)
+                print(
+                    f"{log_prefix} Warning: {description} failed "
+                    f"(attempt {attempt}/{attempts}): {type(exc).__name__}: {first_line}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+            else:
+                print(
+                    f"{log_prefix} Warning: {description} failed "
+                    f"(attempt {attempt}/{attempts}): {type(exc).__name__}: {first_line}. "
+                    "Retries exhausted."
+                )
+    assert last_exc is not None
+    raise last_exc
 
 
 class MathSolverSignature(dspy.Signature):
@@ -420,6 +479,7 @@ class MathSolverClient:
         enable_cache: bool = True,
         output_mode: str = "integer",
         task: PromptOptimizationDatasetTask | None = None,
+        api_max_retries: int = DEFAULT_API_MAX_RETRIES,
     ):
         self.cache_dir = cache_dir
         self.raw_cache_namespace = dict(cache_namespace or {})
@@ -429,6 +489,7 @@ class MathSolverClient:
         self.enable_cache = enable_cache
         self.output_mode = output_mode
         self.task = task
+        self.api_max_retries = max(1, int(api_max_retries))
         self._lock = threading.RLock()
         self._phase_agnostic_index: dict[str, list[Path]] | None = None
         self._cross_root_phase_agnostic_index: dict[str, list[Path]] | None = None
@@ -490,7 +551,11 @@ class MathSolverClient:
         cache_empty_failure = True
         for attempt in range(1, max_retries + 1):
             try:
-                prediction = self._call_solver(example, answer_instructions, include_reasoning=True)
+                prediction = call_with_transient_retries(
+                    lambda: self._call_solver(example, answer_instructions, include_reasoning=True),
+                    max_retries=self.api_max_retries,
+                    description="solver API call",
+                )
                 normalized_prediction = self._normalize_prediction(prediction)
                 if cache_enabled:
                     self._save_prediction_cache(
@@ -520,10 +585,15 @@ class MathSolverClient:
                     f"(attempt {attempt}/{max_retries}); raw response: {raw_response[:200]!r}"
                 )
             except Exception as exc:
+                # Transient API failures were already retried up to api_max_retries
+                # times inside call_with_transient_retries; reaching here means they
+                # were exhausted. Do not poison the cache with an empty answer.
                 cache_empty_failure = False
                 print(
-                    "[AIME] Warning: solver API call failed "
-                    f"(attempt {attempt}/{max_retries}): {type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+                    "[AIME] Warning: solver API call failed after "
+                    f"{self.api_max_retries} attempt(s) "
+                    f"(parse-attempt {attempt}/{max_retries}): "
+                    f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}"
                 )
 
         print("[AIME] Warning: exhausted parse retries; returning empty prediction.")
@@ -899,14 +969,18 @@ class MathSolverClient:
 class CachedLanguageModel:
     """Request-level cache wrapper for GEPA proposal/reflection LM calls."""
 
-    def __init__(self, model_name: str, cache_dir: Path, **lm_kwargs):
+    def __init__(self, model_name: str, cache_dir: Path, *, api_max_retries: int = DEFAULT_API_MAX_RETRIES, **lm_kwargs):
         from gepa.optimize_anything import make_litellm_lm
 
         self.model_name = model_name
         self.raw_lm_kwargs = dict(lm_kwargs)
         self.lm_kwargs = _normalized_cache_mapping(self.raw_lm_kwargs)
         self.cache_dir = cache_dir
-        self._lm = make_litellm_lm(model_name, **lm_kwargs)
+        self.api_max_retries = max(1, int(api_max_retries))
+        # Disable the underlying LM's own retry loop so we don't compound it with
+        # ours (api_max_retries attempts here). num_retries is an LM constructor
+        # arg, not a completion kwarg, so it stays out of the request cache key.
+        self._lm = make_litellm_lm(model_name, num_retries=0, **lm_kwargs)
         self._lock = threading.RLock()
 
     @property
@@ -925,7 +999,11 @@ class CachedLanguageModel:
             self._save(cache_path, prompt, response)
             return response
 
-        response = self._lm(prompt)
+        response = call_with_transient_retries(
+            lambda: self._lm(prompt),
+            max_retries=self.api_max_retries,
+            description="reflection LM call",
+        )
         self._save(cache_path, prompt, response)
         return response
 
@@ -1003,6 +1081,7 @@ def configure_default_solver_client(
     enable_cache: bool = True,
     output_mode: str = "integer",
     task: PromptOptimizationDatasetTask | None = None,
+    api_max_retries: int = DEFAULT_API_MAX_RETRIES,
 ) -> None:
     global _DEFAULT_SOLVER_CLIENT
     _DEFAULT_SOLVER_CLIENT = MathSolverClient(
@@ -1013,6 +1092,7 @@ def configure_default_solver_client(
         enable_cache=enable_cache,
         output_mode=output_mode,
         task=task,
+        api_max_retries=api_max_retries,
     )
 
 
@@ -1860,7 +1940,6 @@ class MBPPTask(PromptOptimizationDatasetTask):
         return_stats: bool = False,
         cache_label: str | None = None,
     ):
-        del use_solver_cache, cache_label
         if pass_k < 1:
             raise ValueError(f"pass_k must be >= 1, got {pass_k}")
 
@@ -1875,8 +1954,24 @@ class MBPPTask(PromptOptimizationDatasetTask):
 
         def evaluate_one(example):
             scores = []
-            for _attempt_idx in range(pass_k):
-                score, _ = self.evaluate_example(prompt, example)
+            for attempt_idx in range(pass_k):
+                # Mirror the AIME math path: give each pass@k attempt a distinct
+                # cache key so that, when the solver cache is enabled, attempts do
+                # not collapse onto a single cached prediction (which would turn
+                # pass@k into pass@1).
+                cache_extra = None
+                lookup_cache_extra = None
+                if pass_k > 1:
+                    cache_extra = {"pass_k": pass_k, "attempt_idx": attempt_idx}
+                if cache_label is not None or pass_k > 1:
+                    lookup_cache_extra = {"pass_k": pass_k, "attempt_idx": attempt_idx}
+                score, _ = self.evaluate_example(
+                    prompt,
+                    example,
+                    use_solver_cache=use_solver_cache,
+                    cache_extra=cache_extra,
+                    lookup_cache_extra=lookup_cache_extra,
+                )
                 scores.append(score)
             return {
                 "pass_score": float(any(score >= 1.0 for score in scores)),

@@ -99,11 +99,13 @@ class AIMEExperiment:
             enable_cache=self.config.solver_cache_enabled,
             output_mode="python_code" if self.config.dataset_name == "mbpp" else "integer",
             task=self.task,
+            api_max_retries=self.config.solver_api_max_retries,
         )
         print(f"[AIME] Solver API cache enabled: {self.config.solver_cache_enabled}")
         print(f"[AIME] Solver API cache directory: {self.config.solver_cache_dir}")
         print(f"[AIME] Final evaluation solver cache enabled: {self.config.eval_solver_cache_enabled}")
         print(f"[AIME] Final evaluation metric: pass@{self.config.eval_pass_k}")
+        print(f"[AIME] Solver API max retries (transient failures): {self.config.solver_api_max_retries}")
         print("[AIME] Using direct request-level cache only; legacy cache migration is disabled.")
 
         print(
@@ -120,6 +122,7 @@ class AIMEExperiment:
         reflection_lm = CachedLanguageModel(
             self.config.reflection_model,
             cache_dir=self.config.reflection_cache_dir,
+            api_max_retries=self.config.reflection_api_max_retries,
             api_key=reflection_api_key,
             api_base=self.config.solver_api_base,
             temperature=self.config.reflection_temperature,
@@ -127,7 +130,8 @@ class AIMEExperiment:
         print(
             "[AIME] Reflection LM configured "
             f"(model={self.config.reflection_model}, api_base={self.config.solver_api_base}, "
-            f"temperature={self.config.reflection_temperature})"
+            f"temperature={self.config.reflection_temperature}, "
+            f"api_max_retries={self.config.reflection_api_max_retries})"
         )
         print(f"[AIME] Reflection LM cache directory: {reflection_lm.cache_dir}")
         return reflection_lm

@@ -13,6 +13,7 @@ DEFAULT_SHARED_CACHE_API_KEY = ""
 DEFAULT_SOLVER_TEMPERATURE = 0.2
 DEFAULT_REFLECTION_TEMPERATURE = 1.0
 DEFAULT_MAX_TOKENS = 32000
+DEFAULT_API_MAX_RETRIES = 5
 DEFAULT_BASELINE_SCORE = 0.5666666666666667
 DEFAULT_DATASET = "aime"
 DEFAULT_MBPP_DATA_DIR = Path("/home/jlzeng/code/mbpptest/data")
@@ -132,6 +133,8 @@ class AIMEExperimentConfig:
     solver_model: str
     solver_api_base: str
     reflection_model: str
+    solver_api_max_retries: int
+    reflection_api_max_retries: int
     output_root: Path
     run_id: str
     run_dir: Path
@@ -188,6 +191,8 @@ class AIMEExperimentConfig:
                 "AIME_REFLECTION_MODEL",
                 os.environ.get("AIME_DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
             ),
+            solver_api_max_retries=_env_int("AIME_SOLVER_API_MAX_RETRIES", DEFAULT_API_MAX_RETRIES),
+            reflection_api_max_retries=_env_int("AIME_REFLECTION_API_MAX_RETRIES", DEFAULT_API_MAX_RETRIES),
             output_root=backend_root,
             run_id=run_id,
             run_dir=run_dir,
