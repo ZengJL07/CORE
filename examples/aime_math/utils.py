@@ -117,6 +117,13 @@ class MathSolverSignature(dspy.Signature):
     answer = dspy.OutputField(desc="The final numerical answer.")
 
 
+class CodeSolverSignature(dspy.Signature):
+    input = dspy.InputField(desc="The programming task to solve.")
+    answer = dspy.OutputField(
+        desc="The solution as a single fenced Python code block using ```python ... ```, with any required imports."
+    )
+
+
 @dataclass(frozen=True)
 class DatasetSplits:
     trainset: list[Any]
@@ -548,6 +555,9 @@ class MathSolverClient:
                 return cached_prediction
 
         answer_instructions = _build_solver_instructions(prompt, include_reasoning=True, output_mode=self.output_mode)
+        # Stash the raw candidate prompt so _call_solver's dspy path can use it as
+        # signature instructions (kept off the method signature for subclass compat).
+        self._current_raw_prompt = prompt
         cache_empty_failure = True
         for attempt in range(1, max_retries + 1):
             try:
@@ -920,11 +930,93 @@ class MathSolverClient:
                 task=self.task,
             )
         if self.model_name is not None:
+            if self._use_dspy_solver():
+                # The raw (un-instrumented) candidate prompt is stashed on the instance
+                # by predict(); fall back to `instructions` if not set. Using an instance
+                # attribute (instead of a new _call_solver kwarg) keeps the method
+                # signature backward-compatible with subclasses that override it.
+                raw_prompt = getattr(self, "_current_raw_prompt", None)
+                return self._call_dspy_solver(
+                    example,
+                    raw_prompt if raw_prompt is not None else instructions,
+                    include_reasoning,
+                )
             return self._call_litellm_solver(example, instructions)
 
         signature = MathSolverSignature.with_instructions(instructions)
         predictor = dspy.ChainOfThought(signature) if include_reasoning else dspy.Predict(signature)
         return predictor(input=example.input)
+
+    def _use_dspy_solver(self) -> bool:
+        """Whether to drive the solver via dspy (ChainOfThought) instead of raw
+        litellm + structured-text parsing.
+
+        Enabled by default for both the integer math task and the python_code (mbpp)
+        task; disable with AIME_SOLVER_USE_DSPY=0 to fall back to the legacy litellm
+        path. Output modes other than these two keep the legacy behavior.
+        """
+        if self.output_mode not in {"integer", "python_code"}:
+            return False
+        flag = os.environ.get("AIME_SOLVER_USE_DSPY", "1").strip().lower()
+        return flag in {"1", "true", "yes", "on"}
+
+    def _dspy_signature(self):
+        """Pick the dspy signature matching this client's output mode. Both render the
+        same ChatAdapter field layout (input -> reasoning -> answer); only the answer
+        field description differs so the model emits an integer vs a Python code block."""
+        if self.output_mode == "python_code":
+            return CodeSolverSignature
+        return MathSolverSignature
+
+    def _get_dspy_predictor(self, include_reasoning: bool):
+        """Build (once per client) a dspy.LM + predictor matching this client's model
+        config. The LM mirrors completion_kwargs (api_key/base/temperature/max_tokens)
+        with dspy's own request cache disabled so OUR cache layer stays authoritative.
+
+        For the integer mode the reasoning predictor is
+        dspy.ChainOfThought(MathSolverSignature) — byte-for-byte the original gepa
+        solver prompt; for python_code it uses CodeSolverSignature instead.
+        """
+        cache_key = "reasoning" if include_reasoning else "answer_only"
+        cached = getattr(self, "_dspy_predictors", None)
+        if cached is None:
+            cached = {}
+            self._dspy_predictors = cached
+        if cache_key in cached:
+            return cached[cache_key]
+
+        lm_kwargs = {
+            k: v
+            for k, v in self.completion_kwargs.items()
+            if k in {"api_key", "api_base", "temperature", "max_tokens"}
+        }
+        lm_kwargs["cache"] = False
+        lm = dspy.LM(self.model_name, **lm_kwargs)
+
+        signature = self._dspy_signature()
+        if include_reasoning:
+            predictor = dspy.ChainOfThought(signature)
+        else:
+            predictor = dspy.Predict(signature)
+
+        cached[cache_key] = (lm, predictor)
+        return cached[cache_key]
+
+    def _call_dspy_solver(self, example, raw_prompt: str, include_reasoning: bool):
+        """Drive the solver like the ORIGINAL gepa impl: dspy.ChainOfThought over the
+        mode-appropriate signature with the candidate prompt as signature instructions.
+        dspy's ChatAdapter builds the prompt and parses the reasoning/answer fields.
+        The answer field (integer or fenced Python block) is then handled by the
+        existing _normalize_prediction(_fields) path per output_mode."""
+        lm, predictor = self._get_dspy_predictor(include_reasoning)
+        # ChainOfThought exposes the underlying Predict at `.predict`; Predict is itself.
+        target = predictor.predict if hasattr(predictor, "predict") else predictor
+        target.signature = target.signature.with_instructions(raw_prompt.strip())
+        with dspy.context(lm=lm):
+            prediction = predictor(input=str(example.input))
+        answer = str(getattr(prediction, "answer", "") or "")
+        reasoning = str(getattr(prediction, "reasoning", "") or "")
+        return dspy.Prediction(answer=answer, reasoning=reasoning)
 
     def _call_litellm_solver(self, example, instructions: str):
         import litellm
