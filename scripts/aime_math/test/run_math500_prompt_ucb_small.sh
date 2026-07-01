@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="/home/jlzeng/code/gepa"
-TEST_ROOT="$REPO_ROOT/examples/aime_math/test/aime_small/prompt_ucb"
-COMMON_CACHE_ROOT="/home/jlzeng/code/cache/gepa/real/aime/shared"
+TEST_ROOT="$REPO_ROOT/examples/aime_math/test/math500_small/prompt_ucb"
+COMMON_CACHE_ROOT="/home/jlzeng/code/cache/gepa/real/math500/shared"
 cd "$REPO_ROOT"
 
 if [[ -f ".venv/bin/activate" ]]; then
@@ -13,18 +13,21 @@ fi
 
 mkdir -p "$TEST_ROOT"
 
-export AIME_DATASET="aime"
+export AIME_DATASET="math500"
 export AIME_SEED="${AIME_SEED:-42}"
 export AIME_MAX_METRIC_CALLS="${AIME_MAX_METRIC_CALLS:-24}"
 export AIME_MAX_WORKERS="${AIME_MAX_WORKERS:-1}"
 export AIME_PARALLEL_EVALUATION="${AIME_PARALLEL_EVALUATION:-false}"
 export AIME_EVAL_PASS_K="${AIME_EVAL_PASS_K:-1}"
 export AIME_SKIP_BASELINE_EVAL="${AIME_SKIP_BASELINE_EVAL:-false}"
+
+# MATH-500 ships a single 500-example split; carve a small train/val out of the
+# front (seeded shuffle) and bound train/val/test for a quick smoke run.
+export AIME_MATH500_TRAIN_SIZE="${AIME_MATH500_TRAIN_SIZE:-4}"
+export AIME_MATH500_VAL_SIZE="${AIME_MATH500_VAL_SIZE:-4}"
 export AIME_MAX_TRAIN_EXAMPLES="${AIME_MAX_TRAIN_EXAMPLES:-4}"
 export AIME_MAX_VAL_EXAMPLES="${AIME_MAX_VAL_EXAMPLES:-4}"
 export AIME_MAX_TEST_EXAMPLES="${AIME_MAX_TEST_EXAMPLES:-4}"
-export AIME_ENABLE_HMMT_FEB_2025_TEST="${AIME_ENABLE_HMMT_FEB_2025_TEST:-false}"
-export AIME_ENABLE_HMMT_FEB_2026_TEST="${AIME_ENABLE_HMMT_FEB_2026_TEST:-false}"
 
 export AIME_PRG_CANDIDATE_POOL_SIZE="${AIME_PRG_CANDIDATE_POOL_SIZE:-20}"
 export AIME_PRG_REFLECT_TRAIN_BATCH_SIZE="${AIME_PRG_REFLECT_TRAIN_BATCH_SIZE:-3}"
@@ -41,6 +44,9 @@ export AIME_PRG_PROMPT_SCORE_Z_CLIP="${AIME_PRG_PROMPT_SCORE_Z_CLIP:-3.0}"
 # Disable parent reflection so prompt_ucb mutates from the current prompt + feedback only,
 # matching GEPA's reflection inputs (no parent prompt/reflection history injected).
 export AIME_PRG_USE_PARENT_HISTORY="${AIME_PRG_USE_PARENT_HISTORY:-false}"
+
+# Use the legacy litellm + \boxed{} solver path (no JSON envelope).
+export AIME_SOLVER_USE_DSPY="${AIME_SOLVER_USE_DSPY:-0}"
 
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:?Please set DEEPSEEK_API_KEY}"
 export DEEPSEEK_API_BASE="${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}"

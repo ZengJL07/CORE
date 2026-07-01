@@ -16,6 +16,9 @@ class ParentReflectionGEPAConfig:
     ucb_exploration_coef: float = 0.4
     prompt_ucb_exploration_coef: float = 0.4
     prompt_score_std_floor: float = 1e-3
+    prompt_ucb_use_child_prediction: bool = True
+    prompt_shrinkage_prior: float = 1.0
+    prompt_score_z_clip: float = 3.0
     train_rejection_max_retries: int = 8
     val_rejection_max_retries: int = 8
     use_parent_history: bool = True
@@ -39,6 +42,10 @@ class ParentReflectionGEPAConfig:
             raise ValueError("prompt_ucb_exploration_coef must be >= 0")
         if self.prompt_score_std_floor <= 0:
             raise ValueError("prompt_score_std_floor must be > 0")
+        if self.prompt_shrinkage_prior < 0:
+            raise ValueError("prompt_shrinkage_prior must be >= 0")
+        if self.prompt_score_z_clip <= 0:
+            raise ValueError("prompt_score_z_clip must be > 0")
         if self.train_rejection_max_retries < 1:
             raise ValueError("train_rejection_max_retries must be >= 1")
         if self.val_rejection_max_retries < 1:
@@ -56,6 +63,9 @@ class ParentReflectionGEPAConfig:
             ucb_exploration_coef=_env_float("AIME_PRG_UCB_EXPLORATION_COEF", 0.4),
             prompt_ucb_exploration_coef=_env_float("AIME_PRG_PROMPT_UCB_EXPLORATION_COEF", 0.4),
             prompt_score_std_floor=_env_float("AIME_PRG_PROMPT_SCORE_STD_FLOOR", 1e-3),
+            prompt_ucb_use_child_prediction=_env_bool("AIME_PRG_PROMPT_UCB_USE_CHILD_PREDICTION", True),
+            prompt_shrinkage_prior=_env_float("AIME_PRG_PROMPT_SHRINKAGE_PRIOR", 1.0),
+            prompt_score_z_clip=_env_float("AIME_PRG_PROMPT_SCORE_Z_CLIP", 3.0),
             train_rejection_max_retries=_env_int("AIME_PRG_TRAIN_REJECTION_MAX_RETRIES", 8),
             val_rejection_max_retries=_env_int("AIME_PRG_VAL_REJECTION_MAX_RETRIES", 8),
             use_parent_history=_env_bool("AIME_PRG_USE_PARENT_HISTORY", True),

@@ -33,6 +33,11 @@ export AIME_PRG_REFLECT_TRAIN_BATCH_SIZE="${AIME_PRG_REFLECT_TRAIN_BATCH_SIZE:-3
 export AIME_PRG_PROBE_VAL_BATCH_SIZE="${AIME_PRG_PROBE_VAL_BATCH_SIZE:-0}"
 export AIME_PRG_MAX_OUTER_STEPS="${AIME_PRG_MAX_OUTER_STEPS:-1000}"
 export AIME_PRG_NUM_PARALLEL_BRANCHES="${AIME_PRG_NUM_PARALLEL_BRANCHES:-4}"
+# prompt-UCB sampling strategy: child_prediction (new, default) vs self_score (legacy).
+# Set AIME_PRG_PROMPT_UCB_USE_CHILD_PREDICTION=false to fall back to the legacy z-score-on-own-score version.
+export AIME_PRG_PROMPT_UCB_USE_CHILD_PREDICTION="${AIME_PRG_PROMPT_UCB_USE_CHILD_PREDICTION:-true}"
+export AIME_PRG_PROMPT_SHRINKAGE_PRIOR="${AIME_PRG_PROMPT_SHRINKAGE_PRIOR:-1.0}"
+export AIME_PRG_PROMPT_SCORE_Z_CLIP="${AIME_PRG_PROMPT_SCORE_Z_CLIP:-3.0}"
 
 # Disable parent reflection so prompt_ucb mutates from the current prompt + feedback only,
 # matching GEPA's reflection inputs (no parent prompt/reflection history injected).

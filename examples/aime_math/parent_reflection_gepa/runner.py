@@ -64,6 +64,7 @@ class ParentReflectionGEPARunner:
                 f"parent={parent_display} "
                 f"val={candidate.val_score:.2%} "
                 f"selected={candidate.times_selected_as_current} "
+                f"children={len(candidate.child_val_scores)} "
                 f"prompt={self._format_prompt_for_log(candidate.prompt)}"
             )
 
@@ -79,6 +80,9 @@ class ParentReflectionGEPARunner:
             f"ucb_exploration_coef={self.config.ucb_exploration_coef}, "
             f"prompt_ucb_exploration_coef={self.config.prompt_ucb_exploration_coef}, "
             f"prompt_score_std_floor={self.config.prompt_score_std_floor}, "
+            f"prompt_ucb_use_child_prediction={self.config.prompt_ucb_use_child_prediction}, "
+            f"prompt_shrinkage_prior={self.config.prompt_shrinkage_prior}, "
+            f"prompt_score_z_clip={self.config.prompt_score_z_clip}, "
             f"train_retries={self.config.train_rejection_max_retries}, "
             f"val_retries={self.config.val_rejection_max_retries}, "
             f"use_parent_history={self.config.use_parent_history}"
@@ -193,6 +197,8 @@ class ParentReflectionGEPARunner:
             train_scores_by_sample={} if parent_candidate is None else dict(parent_candidate.train_scores_by_sample),
         )
         self._next_candidate_id += 1
+        if parent_candidate is not None:
+            parent_candidate.child_val_scores.append(val_score)
         print(
             "[AIME] Built candidate record: "
             f"id={candidate.candidate_id} "
@@ -226,6 +232,49 @@ class ParentReflectionGEPARunner:
             components.append((candidate, advantage, exploration, ucb_score))
         return components
 
+    def _compute_prompt_ucb_components_child_prediction(
+        self,
+        candidates: list[CandidateRecord],
+    ) -> list[tuple[CandidateRecord, float, float, float]]:
+        if not candidates:
+            return []
+
+        kappa = self.config.prompt_shrinkage_prior
+        z_clip = self.config.prompt_score_z_clip
+
+        # Q_i = shrinkage estimate of the next child's score:
+        #   (kappa * s_i + sum(child_scores)) / (kappa + n_i)
+        # With n_i == 0 this degrades to s_i (the candidate's own val_score).
+        q_values: list[float] = []
+        for candidate in candidates:
+            n_i = len(candidate.child_val_scores)
+            child_sum = sum(candidate.child_val_scores)
+            q_values.append((kappa * candidate.val_score + child_sum) / (kappa + n_i))
+
+        q_mean = mean(q_values)
+        q_std = pstdev(q_values)
+        effective_std = max(q_std, self.config.prompt_score_std_floor)
+        total_selected = sum(candidate.times_selected_as_current for candidate in self.candidate_pool)
+        log_term = math.log(total_selected + 1.0)
+
+        components: list[tuple[CandidateRecord, float, float, float]] = []
+        for candidate, q_i in zip(candidates, q_values, strict=True):
+            advantage = max(-z_clip, min(z_clip, (q_i - q_mean) / effective_std))
+            exploration = self.config.prompt_ucb_exploration_coef * math.sqrt(
+                log_term / (candidate.times_selected_as_current + 1.0)
+            )
+            ucb_score = advantage + exploration
+            components.append((candidate, advantage, exploration, ucb_score))
+        return components
+
+    def _prompt_ucb_components(
+        self,
+        candidates: list[CandidateRecord],
+    ) -> list[tuple[CandidateRecord, float, float, float]]:
+        if self.config.prompt_ucb_use_child_prediction:
+            return self._compute_prompt_ucb_components_child_prediction(candidates)
+        return self._compute_prompt_ucb_components(candidates)
+
     def _sample_current_candidates_with_prompt_ucb(self, outer_step: int) -> list[CandidateRecord]:
         pool_limited_cap = len(self.candidate_pool) + 1
         target_count = min(self.config.num_parallel_branches, outer_step, pool_limited_cap)
@@ -235,12 +284,13 @@ class ParentReflectionGEPARunner:
         selected_candidates: list[CandidateRecord] = []
         print(
             "[AIME] Sampling current prompts for parallel branches with prompt-UCB softmax: "
+            f"strategy={'child_prediction' if self.config.prompt_ucb_use_child_prediction else 'self_score'} "
             f"target={self.config.num_parallel_branches} "
             f"pool_cap={pool_limited_cap} "
             f"actual={target_count}"
         )
         for branch_slot in range(1, target_count + 1):
-            components = self._compute_prompt_ucb_components(self.candidate_pool)
+            components = self._prompt_ucb_components(self.candidate_pool)
             ucb_scores = [ucb_score for _, _, _, ucb_score in components]
             probs = softmax(ucb_scores, temperature=self.config.score_sampling_temperature)
             draw = self.rng.random()

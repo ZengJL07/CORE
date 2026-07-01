@@ -13,6 +13,18 @@ Optimize a math-solving prompt for AIME competition problems. The solver and ref
 - **Test**: `MathArena/aime_2025` (AIME 2025)
 - **Optional extra tests**: `MathArena/hmmt_feb_2025`, `MathArena/hmmt_feb_2026` (enabled via boolean flags)
 
+### MATH-500
+
+Set `AIME_DATASET=math500` to optimize on the [`HuggingFaceH4/MATH-500`](https://huggingface.co/datasets/HuggingFaceH4/MATH-500)
+benchmark instead of AIME. MATH-500 ships a single 500-example `test` split, so we
+shuffle it with `AIME_SEED` and carve our own train/val/test:
+
+- `AIME_MATH500_TRAIN_SIZE` (default `200`) and `AIME_MATH500_VAL_SIZE` (default `100`)
+  count from the front of the shuffled list; the remainder becomes the test set.
+- Answers may be non-integer (fractions, radicals, `\frac{14}{3}`, ...); the math
+  metric already matches general exact-math expressions, not just integers.
+- The HMMT extra-test flags only apply to `AIME_DATASET=aime`.
+
 ## Setup
 
 From the repo root (`gepa/`):

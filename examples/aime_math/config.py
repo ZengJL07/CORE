@@ -21,8 +21,10 @@ DEFAULT_MBPP_HF_DATASET = "google-research-datasets/mbpp"
 DEFAULT_MBPP_HF_CONFIG = "full"
 DEFAULT_HMMT_FEB_2025_TEST_DATASET = "MathArena/hmmt_feb_2025"
 DEFAULT_HMMT_FEB_2026_TEST_DATASET = "MathArena/hmmt_feb_2026"
+DEFAULT_MATH500_DATASET = "HuggingFaceH4/MATH-500"
 DEFAULT_INITIAL_PROMPTS = {
     "aime": "Try to solve the math problem carefully. Break down the steps and provide the final answer as a single exact answer.",
+    "math500": "Try to solve the math problem carefully. Break down the steps and provide the final answer as a single exact answer.",
     "mbpp": (
         "Try to solve the Python programming task carefully. "
         "If a required function name is provided in the task, you must define exactly that function name. "
@@ -95,9 +97,9 @@ def _env_optional_int(name: str) -> int | None:
 
 def _env_dataset(name: str, default: str) -> str:
     value = os.environ.get(name, default).strip().lower()
-    if value in {"aime", "mbpp"}:
+    if value in {"aime", "math500", "mbpp"}:
         return value
-    raise ValueError(f"{name} must be one of 'aime' or 'mbpp', got {value!r}")
+    raise ValueError(f"{name} must be one of 'aime', 'math500', or 'mbpp', got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,10 @@ class AIMEExperimentConfig:
     mbpp_hf_dataset: str
     mbpp_hf_config: str | None
     mbpp_data_dir: Path
+    math500_dataset: str
+    math500_train_size: int
+    math500_val_size: int
+    math500_test_size: int | None
     max_train_examples: int | None
     max_val_examples: int | None
     max_test_examples: int | None
@@ -161,6 +167,10 @@ class AIMEExperimentConfig:
             mbpp_hf_dataset=os.environ.get("AIME_MBPP_HF_DATASET", DEFAULT_MBPP_HF_DATASET),
             mbpp_hf_config=os.environ.get("AIME_MBPP_HF_CONFIG", DEFAULT_MBPP_HF_CONFIG) or None,
             mbpp_data_dir=Path(os.environ.get("AIME_MBPP_DATA_DIR", str(DEFAULT_MBPP_DATA_DIR))),
+            math500_dataset=os.environ.get("AIME_MATH500_DATASET", DEFAULT_MATH500_DATASET),
+            math500_train_size=_env_int("AIME_MATH500_TRAIN_SIZE", 200),
+            math500_val_size=_env_int("AIME_MATH500_VAL_SIZE", 100),
+            math500_test_size=_env_optional_int("AIME_MATH500_TEST_SIZE"),
             max_train_examples=_env_optional_int("AIME_MAX_TRAIN_EXAMPLES"),
             max_val_examples=_env_optional_int("AIME_MAX_VAL_EXAMPLES"),
             max_test_examples=_env_optional_int("AIME_MAX_TEST_EXAMPLES"),

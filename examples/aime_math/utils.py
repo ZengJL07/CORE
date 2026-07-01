@@ -35,6 +35,7 @@ TRAIN_JSONL = DATA_DIR / "aimo_validation_aime_train.jsonl"
 TEST_JSONL = DATA_DIR / "aime_2025_test.jsonl"
 HMMT_FEB_2025_TEST_JSONL = DATA_DIR / "hmmt_feb_2025_test.jsonl"
 HMMT_FEB_2026_TEST_JSONL = DATA_DIR / "hmmt_feb_2026_test.jsonl"
+MATH500_JSONL = DATA_DIR / "math500_test.jsonl"
 API_CACHE_DIR = Path("outputs/aime_math/api_cache")
 LEGACY_API_OUTPUT_DIR = Path("outputs/aime_math/api_outputs")
 LEGACY_FITNESS_CACHE_JSON_DIR = Path("outputs/aime_math/fitness_cache_json")
@@ -46,6 +47,11 @@ _LEGACY_SOLVER_CACHE_ROOTS = (
 )
 
 _DEFAULT_SOLVER_CLIENT: "MathSolverClient | None" = None
+# Thread-local carrier for the raw candidate prompt across the predict() -> _call_solver
+# -> _call_dspy_solver chain. The solver client is a process-wide singleton evaluated
+# concurrently under GEPA's parallel proposals, so a plain instance attribute would let
+# one thread's prompt clobber another's. Thread-local storage scopes it per worker.
+_SOLVER_TLS = threading.local()
 _CACHE_VOLATILE_KEYS = frozenset({"api_base", "api_key"})
 _DEFAULT_DATASET_TASK: "PromptOptimizationDatasetTask | None" = None
 TEST_SOLVER_MODEL_PREFIX = "test://"
@@ -240,23 +246,20 @@ def _build_solver_instructions(prompt: str, include_reasoning: bool, *, output_m
             f"- Example format: {schema_hint}\n"
         )
 
-    if include_reasoning:
-        schema_hint = '{"reasoning": "...", "answer": "..."}'
-        fields_hint = "reasoning, answer"
-    else:
-        schema_hint = '{"answer": "..."}'
-        fields_hint = "answer"
-
+    # Integer / general math mode. Mirror the original gepa solver: let the model
+    # reason freely in prose, then state the final answer on the last line inside
+    # a single \boxed{...}. No JSON wrapper — a JSON envelope conflicts with long
+    # chain-of-thought reasoning and confuses the model on math problems.
     return (
         f"{prompt}\n\n"
         "Output format requirements (must follow exactly):\n"
-        "- Return ONLY a valid JSON object.\n"
-        f"- Include exactly these keys: {fields_hint}.\n"
-        "- `answer` must contain only the final exact answer, with no extra prose.\n"
-        "- Use a plain integer when the problem asks for an integer answer; otherwise use a single exact mathematical expression.\n"
-        "- Allowed exact forms include integers, fractions, radicals, `pi`, factorials, or comma-separated exact values when the problem has multiple answers.\n"
-        "- Do not output markdown or a full solution inside `answer`.\n"
-        f"- Example format: {schema_hint}\n"
+        "- Work through the problem step by step in plain prose.\n"
+        "- End your response with the final answer on its own line, wrapped in \\boxed{...}.\n"
+        "- Put only the final exact answer inside \\boxed{}, with no extra prose.\n"
+        "- Use a plain integer when the problem asks for an integer answer; otherwise use a single exact mathematical "
+        "expression (integers, fractions, radicals, pi, factorials, or comma-separated exact values when the problem "
+        "has multiple answers).\n"
+        "- Example ending: \\boxed{42}\n"
     )
 
 
@@ -555,9 +558,11 @@ class MathSolverClient:
                 return cached_prediction
 
         answer_instructions = _build_solver_instructions(prompt, include_reasoning=True, output_mode=self.output_mode)
-        # Stash the raw candidate prompt so _call_solver's dspy path can use it as
-        # signature instructions (kept off the method signature for subclass compat).
-        self._current_raw_prompt = prompt
+        # Stash the raw candidate prompt for _call_solver's dspy path on a *thread-local*
+        # so concurrent GEPA proposals (the solver client is a process-wide singleton)
+        # never read each other's prompt. Keeping it off the _call_solver signature
+        # preserves backward compatibility with subclasses that override the method.
+        _SOLVER_TLS.raw_prompt = prompt
         cache_empty_failure = True
         for attempt in range(1, max_retries + 1):
             try:
@@ -931,11 +936,12 @@ class MathSolverClient:
             )
         if self.model_name is not None:
             if self._use_dspy_solver():
-                # The raw (un-instrumented) candidate prompt is stashed on the instance
-                # by predict(); fall back to `instructions` if not set. Using an instance
-                # attribute (instead of a new _call_solver kwarg) keeps the method
-                # signature backward-compatible with subclasses that override it.
-                raw_prompt = getattr(self, "_current_raw_prompt", None)
+                # The raw (un-instrumented) candidate prompt is stashed on a thread-local
+                # by predict(); fall back to `instructions` if not set. Using a thread-local
+                # (instead of a new _call_solver kwarg) keeps the method signature
+                # backward-compatible with subclasses that override it, while staying
+                # correct under GEPA's concurrent proposals.
+                raw_prompt = getattr(_SOLVER_TLS, "raw_prompt", None)
                 return self._call_dspy_solver(
                     example,
                     raw_prompt if raw_prompt is not None else instructions,
@@ -968,22 +974,18 @@ class MathSolverClient:
             return CodeSolverSignature
         return MathSolverSignature
 
-    def _get_dspy_predictor(self, include_reasoning: bool):
-        """Build (once per client) a dspy.LM + predictor matching this client's model
-        config. The LM mirrors completion_kwargs (api_key/base/temperature/max_tokens)
-        with dspy's own request cache disabled so OUR cache layer stays authoritative.
+    def _get_dspy_lm(self):
+        """Build (once per client) the dspy.LM matching this client's model config.
 
-        For the integer mode the reasoning predictor is
-        dspy.ChainOfThought(MathSolverSignature) — byte-for-byte the original gepa
-        solver prompt; for python_code it uses CodeSolverSignature instead.
+        The LM mirrors completion_kwargs (api_key/base/temperature/max_tokens) with
+        dspy's own request cache disabled so OUR cache layer stays authoritative.
+        The LM is stateless across calls, so it is safe to share between threads;
+        the per-call predictor (which carries the candidate-specific signature) is
+        built fresh in _call_dspy_solver to avoid cross-thread signature races.
         """
-        cache_key = "reasoning" if include_reasoning else "answer_only"
-        cached = getattr(self, "_dspy_predictors", None)
-        if cached is None:
-            cached = {}
-            self._dspy_predictors = cached
-        if cache_key in cached:
-            return cached[cache_key]
+        lm = getattr(self, "_dspy_lm", None)
+        if lm is not None:
+            return lm
 
         lm_kwargs = {
             k: v
@@ -992,26 +994,23 @@ class MathSolverClient:
         }
         lm_kwargs["cache"] = False
         lm = dspy.LM(self.model_name, **lm_kwargs)
-
-        signature = self._dspy_signature()
-        if include_reasoning:
-            predictor = dspy.ChainOfThought(signature)
-        else:
-            predictor = dspy.Predict(signature)
-
-        cached[cache_key] = (lm, predictor)
-        return cached[cache_key]
+        self._dspy_lm = lm
+        return lm
 
     def _call_dspy_solver(self, example, raw_prompt: str, include_reasoning: bool):
         """Drive the solver like the ORIGINAL gepa impl: dspy.ChainOfThought over the
         mode-appropriate signature with the candidate prompt as signature instructions.
         dspy's ChatAdapter builds the prompt and parses the reasoning/answer fields.
         The answer field (integer or fenced Python block) is then handled by the
-        existing _normalize_prediction(_fields) path per output_mode."""
-        lm, predictor = self._get_dspy_predictor(include_reasoning)
-        # ChainOfThought exposes the underlying Predict at `.predict`; Predict is itself.
-        target = predictor.predict if hasattr(predictor, "predict") else predictor
-        target.signature = target.signature.with_instructions(raw_prompt.strip())
+        existing _normalize_prediction(_fields) path per output_mode.
+
+        A fresh predictor is constructed per call so that the candidate-specific
+        signature instructions cannot leak across threads (the solver client is a
+        process-wide singleton evaluated concurrently under GEPA's parallel proposals).
+        """
+        lm = self._get_dspy_lm()
+        signature = self._dspy_signature().with_instructions(raw_prompt.strip())
+        predictor = dspy.ChainOfThought(signature) if include_reasoning else dspy.Predict(signature)
         with dspy.context(lm=lm):
             prediction = predictor(input=str(example.input))
         answer = str(getattr(prediction, "answer", "") or "")
@@ -1261,15 +1260,129 @@ def _math_answers_match(correct_answer: str, prediction_answer: str) -> tuple[bo
         try:
             return int(correct_answer) == int(prediction_answer), True
         except (ValueError, TypeError):
+            # The model may wrap an integer answer in LaTeX/markup (e.g. "\boxed{5}",
+            # "$5$", "5.") or emit a stray JSON fragment ('": "5"\n}'). Repair the
+            # fragment and retry the int parse, then fall back to canonical-string
+            # equality before declaring the answer unparseable.
+            repaired = _repair_partial_answer_fragment(prediction_answer)
+            try:
+                return int(correct_answer) == int(repaired), True
+            except (ValueError, TypeError):
+                pass
+            if _canonical_answer_equal(correct_answer, prediction_answer):
+                return True, True
             return None, True
 
     expected_values = _parse_math_answer_set(correct_answer)
     predicted_values = _parse_math_answer_set(prediction_answer)
+    if expected_values is not None and predicted_values is not None:
+        if len(expected_values) != len(predicted_values):
+            # Different cardinality could still be the same answer written differently
+            # (e.g. a tuple vs. a single structured object), so defer to the string
+            # comparison rather than declaring a definite mismatch.
+            if _canonical_answer_equal(correct_answer, prediction_answer):
+                return True, False
+            return False, False
+        if _multiset_expr_equal(expected_values, predicted_values):
+            return True, False
+
+    # Sympy could not parse one/both sides, or parsed them as unequal. Many MATH-500
+    # answers are structured (intervals "(2,\infty)", tuples "(6,31,-1)", matrices,
+    # equations "x=5", "90^\circ", text answers, "$32,\!348") that sympy's expression
+    # algebra cannot represent. Canonical-string equality is the safety net: it only
+    # ever upgrades a result to a match, never rejects a sympy-confirmed match.
+    if _canonical_answer_equal(correct_answer, prediction_answer):
+        return True, False
+
     if expected_values is None or predicted_values is None:
         return None, False
-    if len(expected_values) != len(predicted_values):
-        return False, False
-    return _multiset_expr_equal(expected_values, predicted_values), False
+    return False, False
+
+
+def _canonical_answer_equal(correct_answer: str, prediction_answer: str) -> bool:
+    expected = _canonicalize_answer_text(correct_answer)
+    predicted = _canonicalize_answer_text(prediction_answer)
+    if not expected or not predicted:
+        return False
+    return expected == predicted
+
+
+def _canonicalize_answer_text(answer: str) -> str:
+    """Aggressively normalize an answer string for exact comparison of answers that
+    sympy cannot evaluate (intervals, tuples, vectors/matrices, equations, text, ...).
+
+    Strips boxed/answer-prefix wrappers, LaTeX formatting noise (\\left \\right \\!
+    \\, \\dfrac->\\frac, \\frac{a}{b}->a/b, ^{n}->^n, $ / \\$, thousands-separator
+    commas, trailing unit words like "cents"/"degrees"), whitespace, and lowercases.
+    The goal is that two renderings of the SAME answer collapse to the same string
+    without ever conflating genuinely different answers.
+    """
+    text = _normalize_math_answer_text(answer)
+    if not text:
+        return ""
+
+    # \dfrac/\tfrac behave like \frac for display purposes.
+    text = text.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
+    # Superscript braces FIRST ("^{2}" -> "^2") so a fraction operand like
+    # "\pi^{2}" loses its inner braces and the \frac rewrite below can match it.
+    text = re.sub(r"\^\{([^{}]*)\}", r"^\1", text)
+    # \frac{a}{b} (and bare-token variants) -> a/b so that "-1/3" == "-\frac{1}{3}"
+    # (e.g. inside a pmatrix that sympy cannot evaluate).
+    text = _strip_latex_frac_to_slash(text)
+    # Handle \text{...}/\mbox{...}: if the markup is the WHOLE answer body (e.g.
+    # "\text{Evelyn}"), unwrap it to its contents; if it is only a unit suffix/prefix
+    # alongside other math (e.g. "5.4 \text{ cents}"), drop it. Decide by whether any
+    # non-text content remains once every \text{...} block is removed.
+    text_block = r"\\(?:text|mbox|mathrm|mathbf|operatorname)\s*\{[^{}]*\}"
+    without_text_blocks = re.sub(text_block, "", text).strip()
+    if without_text_blocks:
+        # Other math remains -> the \text{} blocks are units; drop them entirely.
+        text = without_text_blocks
+    else:
+        # The answer is purely text -> unwrap the contents so "\text{Evelyn}" == "Evelyn".
+        text = re.sub(
+            r"\\(?:text|mbox|mathrm|mathbf|operatorname)\s*\{([^{}]*)\}",
+            r"\1",
+            text,
+        )
+    # Degree unit: drop the whole "^\circ" / "^{\circ}" / "°" so "90^\circ" == "90".
+    text = re.sub(r"\^\s*\{?\s*\\circ\s*\}?", "", text)
+    # Drop spacing/formatting macros, currency and structural delimiters.
+    for token in ("\\left", "\\right", "\\!", "\\,", "\\;", "\\ ", "\\quad", "\\qquad", "\\$", "$", "°", "\\circ"):
+        text = text.replace(token, "")
+    # Currency remnant: _normalize_math_answer_text already strips a bare "$", so an
+    # escaped "\$12" arrives here as "\12". Drop a backslash sitting in front of a
+    # digit (safe: real macros like \pi/\sqrt/\frac are not followed by a digit here).
+    text = re.sub(r"\\(?=\d)", "", text)
+    # Thousands separators: a comma between a digit and exactly three digits at a
+    # word boundary ("58,500" -> "58500", "32,348" -> "32348"). The 3-digit guard
+    # avoids clobbering comma-separated multi-value answers like "3-2\sqrt2,3+2\sqrt2".
+    text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
+    # Normalize all whitespace away and lowercase.
+    text = re.sub(r"\s+", "", text).lower()
+    return text
+
+
+def _strip_latex_frac_to_slash(text: str) -> str:
+    r"""Rewrite ``\frac`` (braced or bare single-token operands) to ``num/den``.
+
+    Handles the four operand-brace combinations so "\frac{270}7", "\frac{1}{3}",
+    "\frac1{3}", and "\frac12" all collapse to "num/den". Applied repeatedly until
+    stable so nested/adjacent fractions are all rewritten.
+    """
+    patterns = (
+        r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}",
+        r"\\frac\s*\{([^{}]+)\}\s*([0-9A-Za-z])",
+        r"\\frac\s*([0-9A-Za-z])\s*\{([^{}]+)\}",
+        r"\\frac\s*([0-9A-Za-z])\s*([0-9A-Za-z])",
+    )
+    for _ in range(6):
+        before = text
+        for pattern in patterns:
+            text = re.sub(pattern, r"\1/\2", text)
+        if text == before:
+            break
+    return text
 
 
 def _looks_like_integer_answer(answer: str) -> bool:
@@ -1337,11 +1450,35 @@ def _parse_math_expression(expr_text: str) -> sp.Expr | None:
     stripped = str(expr_text).strip()
     if not stripped:
         return None
-    try:
-        return parse_latex(stripped)
-    except Exception:
-        pass
 
+    # Choose the parser by whether the text actually looks like LaTeX. parse_latex
+    # does NOT raise on plain ASCII math like "sqrt(17)" — it silently mangles it
+    # into s*q*r*t(17) (treating each letter as a symbol). So only route through
+    # parse_latex when a LaTeX command/backslash is present; otherwise go straight
+    # to the sympy expression parser (which knows sqrt/pi/factorial via local_dict).
+    parsers = (_parse_with_latex, _parse_with_sympy)
+    if not _looks_like_latex(stripped):
+        parsers = (_parse_with_sympy, _parse_with_latex)
+
+    for parser in parsers:
+        expr = parser(expr_text)
+        if expr is not None:
+            return expr
+    return None
+
+
+def _looks_like_latex(text: str) -> bool:
+    return "\\" in text
+
+
+def _parse_with_latex(expr_text: str) -> sp.Expr | None:
+    try:
+        return parse_latex(str(expr_text).strip())
+    except Exception:
+        return None
+
+
+def _parse_with_sympy(expr_text: str) -> sp.Expr | None:
     transformed = _latexish_to_sympy_expr(expr_text)
     if not transformed:
         return None
@@ -1618,6 +1755,97 @@ def _load_math_dataset_impl(seed: int = 0) -> DatasetSplits:
     return DatasetSplits(trainset=trainset, valset=valset, testset=testset)
 
 
+def _load_math500_dataset_impl(
+    *,
+    seed: int = 0,
+    dataset_name: str = "HuggingFaceH4/MATH-500",
+    train_size: int = 200,
+    val_size: int = 100,
+    test_size: int | None = None,
+) -> DatasetSplits:
+    """Load MATH-500 and split its single 500-example ``test`` split into
+    train/val/test by a seeded shuffle.
+
+    MATH-500 ships only a ``test`` split, so we carve our own train/val/test out
+    of it. ``train_size``/``val_size`` count from the front of the shuffled list;
+    everything left over becomes the test set, optionally truncated to the first
+    ``test_size`` examples (``None`` keeps the whole remainder). The ``solution``
+    field is kept on the train/val examples so reflection can learn from worked
+    solutions (mirrors the AIME train split); the test split intentionally drops
+    it.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not MATH500_JSONL.exists():
+        print(f"[AIME] Local MATH-500 dataset not found. Downloading {dataset_name} to {MATH500_JSONL}...")
+        rows = []
+        raw_dataset = load_dataset(dataset_name, split="test")
+        for item in raw_dataset:
+            rows.append(
+                {
+                    "input": item["problem"],
+                    "answer": item["answer"],
+                    "solution": item.get("solution", ""),
+                    "subject": item.get("subject", ""),
+                    "level": item.get("level"),
+                    "unique_id": item.get("unique_id", ""),
+                }
+            )
+        with MATH500_JSONL.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(f"[AIME] Saved MATH-500 dataset JSONL: {MATH500_JSONL} ({len(rows)} rows)")
+    else:
+        print(f"[AIME] Using local MATH-500 dataset JSONL: {MATH500_JSONL}")
+
+    rows = []
+    with MATH500_JSONL.open("r", encoding="utf-8") as f:
+        for line in f:
+            rows.append(json.loads(line))
+
+    random.Random(seed).shuffle(rows)
+
+    if train_size < 0 or val_size < 0:
+        raise ValueError(f"math500 train/val sizes must be >= 0, got {train_size}/{val_size}")
+    if test_size is not None and test_size < 0:
+        raise ValueError(f"math500 test_size must be >= 0, got {test_size}")
+    if train_size + val_size > len(rows):
+        raise ValueError(
+            f"math500 train_size + val_size ({train_size} + {val_size}) exceeds dataset size ({len(rows)})"
+        )
+    remainder = len(rows) - train_size - val_size
+    if test_size is not None and test_size > remainder:
+        raise ValueError(
+            f"math500 test_size ({test_size}) exceeds the {remainder} examples left "
+            f"after train_size + val_size ({train_size} + {val_size})"
+        )
+
+    def _train_example(item: dict) -> Any:
+        return dspy.Example(
+            input=item["input"],
+            answer=str(item["answer"]),
+            solution=item.get("solution", ""),
+        ).with_inputs("input")
+
+    def _test_example(item: dict) -> Any:
+        return dspy.Example(input=item["input"], answer=str(item["answer"])).with_inputs("input")
+
+    test_rows = rows[train_size + val_size :]
+    if test_size is not None:
+        test_rows = test_rows[:test_size]
+
+    trainset = [_train_example(item) for item in rows[:train_size]]
+    valset = [_train_example(item) for item in rows[train_size : train_size + val_size]]
+    testset = [_test_example(item) for item in test_rows]
+
+    print(
+        f"[AIME] Loaded MATH-500 data: train_total={len(trainset)}, "
+        f"val_total={len(valset)}, test_total={len(testset)}"
+    )
+
+    return DatasetSplits(trainset=trainset, valset=valset, testset=testset)
+
+
 def load_extra_math_testset(dataset_name: str, cache_path: Path) -> list[Any]:
     if not cache_path.exists():
         print(f"[AIME] Extra math test dataset not found locally. Downloading {dataset_name} to {cache_path}...")
@@ -1842,6 +2070,46 @@ class AIMEMathTask(PromptOptimizationDatasetTask):
         return str(answer + 1)
 
 
+class MATH500Task(AIMEMathTask):
+    """Dataset/evaluation backend for the MATH-500 benchmark.
+
+    Reuses AIMEMathTask's solver/metric/feedback path verbatim — the math metric
+    already handles general exact-math expressions (fractions, radicals, ...) in
+    addition to integers, which MATH-500 answers require. Only dataset loading
+    differs: MATH-500 ships a single 500-example ``test`` split that we shuffle
+    and carve into train/val/test ourselves.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset_name: str = "HuggingFaceH4/MATH-500",
+        train_size: int = 200,
+        val_size: int = 100,
+        test_size: int | None = None,
+    ):
+        self.dataset_name = dataset_name
+        self.train_size = train_size
+        self.val_size = val_size
+        self.test_size = test_size
+
+    def load_splits(self, *, seed: int = 0) -> DatasetSplits:
+        return _load_math500_dataset_impl(
+            seed=seed,
+            dataset_name=self.dataset_name,
+            train_size=self.train_size,
+            val_size=self.val_size,
+            test_size=self.test_size,
+        )
+
+    def test_stub_failure_answer(self, example: Any) -> str:
+        # MATH-500 answers may be non-integer (fractions, radicals, ...), so the
+        # integer-increment trick used for AIME would crash. Return a sentinel that
+        # cannot match any real answer instead.
+        del example
+        return "__math500_test_stub_wrong_answer__"
+
+
 class MBPPTask(PromptOptimizationDatasetTask):
     """Shared dataset/evaluation backend for MBPP code-generation runs."""
 
@@ -1981,11 +2249,22 @@ class MBPPTask(PromptOptimizationDatasetTask):
         num_failed = len(failed_details)
         score = 1.0 if passed else 0.0
 
+        canonical_solution = str(getattr(example, "canonical_solution", "") or "").strip()
+        reference_suffix = ""
+        if not passed and canonical_solution:
+            reference_suffix = (
+                " A correct reference implementation for this task is:\n"
+                f"```python\n{canonical_solution}\n```\n"
+                "Use it to understand the required behavior and infer what guidance the prompt "
+                "should give, but do NOT hardcode this solution into the prompt."
+            )
+
         if not result.success:
             feedback = (
                 "Execution failed before the test suite completed. "
                 f"Error: {result.error or 'unknown error'}. "
                 "Fix syntax/runtime issues and ensure the code defines the required function."
+                f"{reference_suffix}"
             )
         elif passed:
             feedback = f"Passed all {total_tests} tests. Preserve the working structure and correctness."
@@ -1996,6 +2275,7 @@ class MBPPTask(PromptOptimizationDatasetTask):
                 f"First failing test: {first_failure.get('test', 'n/a')}. "
                 f"Failure detail: {_format_mbpp_assert_failure(str(first_failure.get('error', '')))}. "
                 "Use the failing assertions, runtime output, and traceback to repair the code."
+                f"{reference_suffix}"
             )
 
         side_info = {
@@ -2005,6 +2285,7 @@ class MBPPTask(PromptOptimizationDatasetTask):
             "output": generated_code,
             "reasoning": reasoning,
             "execution_feedback": feedback,
+            "reference_solution": canonical_solution,
             "problem_id": int(getattr(example, "problem_id")),
             "passed": passed,
             "total_tests": total_tests,
@@ -2159,10 +2440,21 @@ def build_dataset_task(
     mbpp_hf_dataset: str = "google-research-datasets/mbpp",
     mbpp_hf_config: str | None = "full",
     mbpp_data_dir: Path | None = None,
+    math500_dataset: str = "HuggingFaceH4/MATH-500",
+    math500_train_size: int = 200,
+    math500_val_size: int = 100,
+    math500_test_size: int | None = None,
 ) -> PromptOptimizationDatasetTask:
     dataset_name = dataset_name.strip().lower()
     if dataset_name == "aime":
         return AIMEMathTask()
+    if dataset_name == "math500":
+        return MATH500Task(
+            dataset_name=math500_dataset,
+            train_size=math500_train_size,
+            val_size=math500_val_size,
+            test_size=math500_test_size,
+        )
     if dataset_name == "mbpp":
         return MBPPTask(
             mbpp_data_dir,

@@ -74,6 +74,10 @@ class AIMEExperiment:
             mbpp_hf_dataset=config.mbpp_hf_dataset,
             mbpp_hf_config=config.mbpp_hf_config,
             mbpp_data_dir=config.mbpp_data_dir,
+            math500_dataset=config.math500_dataset,
+            math500_train_size=config.math500_train_size,
+            math500_val_size=config.math500_val_size,
+            math500_test_size=config.math500_test_size,
         )
         self._setup_solver()
         self.reflection_lm = self._build_reflection_lm()

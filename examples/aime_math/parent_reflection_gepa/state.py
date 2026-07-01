@@ -16,6 +16,7 @@ class CandidateRecord:
     train_scores_by_sample: dict[str, float] = field(default_factory=dict)
     times_selected_as_current: int = 0
     val_sampled_count: dict[str, int] = field(default_factory=dict)
+    child_val_scores: list[float] = field(default_factory=list)
 
 
 @dataclass
