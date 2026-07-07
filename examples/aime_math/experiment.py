@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from examples.aime_math.config import AIMEExperimentConfig
+from examples.aime_math.parent_reflection_gepa.gepa_aligned_proposer import (
+    GEPAAlignedReflectionProposer,
+)
 from examples.aime_math.utils import (
     build_dataset_task,
     CachedLanguageModel,
@@ -280,6 +283,11 @@ class AIMEExperiment:
                 reflection_lm=self.reflection_lm,
                 skip_perfect_score=True,
                 perfect_score=1.0,
+                custom_candidate_proposer=(
+                    GEPAAlignedReflectionProposer(self.reflection_lm)
+                    if self.config.gepa_align_reflection_with_prompt_ucb
+                    else None
+                ),
             ),
             merge=(
                 MergeConfig(
@@ -301,6 +309,7 @@ class AIMEExperiment:
             f"cache_evaluation={gepa_config.engine.cache_evaluation}, "
             f"skip_perfect_score={gepa_config.reflection.skip_perfect_score}, "
             f"perfect_score={gepa_config.reflection.perfect_score}, "
+            f"align_reflection_with_prompt_ucb={self.config.gepa_align_reflection_with_prompt_ucb}, "
             f"merge_enabled={gepa_config.merge is not None}, "
             f"max_merge_invocations={getattr(gepa_config.merge, 'max_merge_invocations', 0)}, "
             f"merge_val_overlap_floor={getattr(gepa_config.merge, 'merge_val_overlap_floor', 0)}"

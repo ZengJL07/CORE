@@ -7,45 +7,58 @@ REFLECTION_TAG = "REFLECTION"
 PROMPT_TAG = "IMPROVED_PROMPT"
 
 
+def _format_single_feedback(idx: int, score: float, side_info: dict) -> str:
+    """Render one (score, side_info) pair into the reflection feedback block.
+
+    This is the single source of truth for feedback rendering, shared by the
+    prompt_ucb runner (via ``format_batch_feedback``) and the GEPA aligned
+    proposer (via ``format_side_info_records``). Keeping one function guarantees
+    both paths concatenate the same execution info in the same order, so the
+    reflection prompt is byte-identical for the same evaluation.
+    """
+    if side_info.get("problem_id") is not None:
+        failed_details = side_info.get("failed_details", []) or []
+        first_failure = failed_details[0] if failed_details else {}
+        return "\n".join(
+            [
+                f"Example {idx}",
+                f"Problem ID: {side_info.get('problem_id', '')}",
+                f"Task: {side_info.get('input', '')}",
+                f"Score: {score:.2f}",
+                f"Passed: {side_info.get('passed', False)}",
+                f"Generated code:\n{side_info.get('output', '')}",
+                f"Evaluation feedback: {side_info.get('execution_feedback', '')}",
+                f"First failing test: {first_failure.get('test', '')}",
+                f"Failure detail: {first_failure.get('error', '')}",
+                f"Stdout: {side_info.get('stdout', '')}",
+                f"Stderr: {side_info.get('stderr', '')}",
+                f"Traceback: {side_info.get('traceback', '')}",
+            ]
+        ).strip()
+    return "\n".join(
+        [
+            f"Example {idx}",
+            f"Problem: {side_info.get('input', '')}",
+            f"Score: {score:.2f}",
+            f"Model reasoning: {side_info.get('reasoning', '')}",
+            f"Model answer: {side_info.get('output', '')}",
+            f"Evaluation feedback: {side_info.get('execution_feedback', '')}",
+        ]
+    ).strip()
+
+
+def format_side_info_records(records: list[tuple[float, dict]]) -> str:
+    """Render a list of ``(score, side_info)`` pairs into the feedback block."""
+    return "\n\n".join(
+        _format_single_feedback(idx, score, side_info)
+        for idx, (score, side_info) in enumerate(records, start=1)
+    )
+
+
 def format_batch_feedback(batch_evaluation) -> str:
-    parts: list[str] = []
-    for idx, item in enumerate(batch_evaluation.example_evaluations, start=1):
-        side_info = item.side_info
-        if side_info.get("problem_id") is not None:
-            failed_details = side_info.get("failed_details", []) or []
-            first_failure = failed_details[0] if failed_details else {}
-            parts.append(
-                "\n".join(
-                    [
-                        f"Example {idx}",
-                        f"Problem ID: {side_info.get('problem_id', '')}",
-                        f"Task: {side_info.get('input', '')}",
-                        f"Score: {item.score:.2f}",
-                        f"Passed: {side_info.get('passed', False)}",
-                        f"Generated code:\n{side_info.get('output', '')}",
-                        f"Evaluation feedback: {side_info.get('execution_feedback', '')}",
-                        f"First failing test: {first_failure.get('test', '')}",
-                        f"Failure detail: {first_failure.get('error', '')}",
-                        f"Stdout: {side_info.get('stdout', '')}",
-                        f"Stderr: {side_info.get('stderr', '')}",
-                        f"Traceback: {side_info.get('traceback', '')}",
-                    ]
-                ).strip()
-            )
-            continue
-        parts.append(
-            "\n".join(
-                [
-                    f"Example {idx}",
-                    f"Problem: {side_info.get('input', '')}",
-                    f"Score: {item.score:.2f}",
-                    f"Model reasoning: {side_info.get('reasoning', '')}",
-                    f"Model answer: {side_info.get('output', '')}",
-                    f"Evaluation feedback: {side_info.get('execution_feedback', '')}",
-                ]
-            ).strip()
-        )
-    return "\n\n".join(parts)
+    return format_side_info_records(
+        [(item.score, item.side_info) for item in batch_evaluation.example_evaluations]
+    )
 
 
 def _format_parent_context(parent_prompt: str | None, parent_reflection: str) -> str:

@@ -142,6 +142,7 @@ ban-relative-imports = "all"
     "S101",    # Allow assert statements in tests
     "TID252",  # Allow relative imports in tests
     "ARG001",  # Allow unused arguments in tests (like pytest fixtures)
+    "E402",    # Tests insert REPO_ROOT into sys.path before importing the package
 ]
 "__init__.py" = ["F401"]  # Init files can be empty
 "src/gepa/gskill/**/*.py" = ["E402"]  # gskill suppresses logging before imports

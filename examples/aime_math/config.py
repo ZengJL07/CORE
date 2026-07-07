@@ -147,6 +147,7 @@ class AIMEExperimentConfig:
     solver_cache_dir: Path
     reflection_cache_dir: Path
     initial_prompt: str
+    gepa_align_reflection_with_prompt_ucb: bool
 
     @classmethod
     def from_env(cls, backend: str) -> "AIMEExperimentConfig":
@@ -214,6 +215,9 @@ class AIMEExperimentConfig:
                 )
             ),
             initial_prompt=initial_prompt,
+            gepa_align_reflection_with_prompt_ucb=_env_bool(
+                "AIME_GEPA_ALIGN_REFLECTION_WITH_PROMPT_UCB", False
+            ),
         )
 
     def solver_cache_namespace(self) -> dict[str, object]:
